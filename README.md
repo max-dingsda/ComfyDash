@@ -1,98 +1,145 @@
-# ComfyDash – Local Model Catalog Dashboard
+ComfyDash – Local Model Catalog Dashboard
 
 ComfyDash helps you make sense of all your downloaded checkpoints, LoRAs, and embeddings by scanning your ComfyUI directories and presenting them in a clear, searchable dashboard. It’s a lightweight local catalog and management tool for ComfyUI model data.
 
 Do you know the issue? You download checkpoints, LoRAs, and embeddings, use them for a while, and later wonder what they actually do. ComfyDash was created to solve exactly that — giving you a clear overview of everything stored in your local ComfyUI setup.
 
-ComfyDash is a lightweight, client‑side dashboard for browsing and managing local **ComfyUI model data**. It combines a Python‑based scanner that generates a structured `catalog.json` file with a modern React frontend built using **Vite** and **TailwindCSS**.
+ComfyDash combines a Python‑based scanner that generates a structured catalog.json file with a modern React frontend built using Vite and TailwindCSS.
 
----
+🚀 Features (MVP 1.0)
 
-## 🚀 Features (MVP 1.0)
+🧩 Scanner (Python CLI)
 
-### 🧩 Scanner (Python CLI)
+Scans any ComfyUI model directory (Checkpoints, LoRAs, Embeddings)
 
-* Scans any ComfyUI model directory (Checkpoints, LoRAs, Embeddings)
-* Generates a unified `catalog.json` file
-* Captures file size, modification date, type, and stable ID
-* Automatically skips missing or invalid files
+Generates a unified catalog.json file
 
-### 🖥️ Dashboard (React + Tailwind)
+Captures file size, modification date, type, and stable ID
 
-* **Accordions** per model type (Checkpoint / LoRA / Embedding)
-* **Search & filter** (client‑side, no backend required)
-* **Inline editing** for CivitAI title, link, trigger tags, base model, provenance, etc.
-* **Local persistence** of all edits via `localStorage`
-* **Heuristic suitability detection** (📷 Realistic / ✏️ Drawing)
-* **Favorites system** and provenance toggle (Auto / Manual)
-* **Pagination** (10 items per accordion)
-* **Responsive layout** with a “Fit to window / Limit width” toggle
-* **Sticky header** and **sticky first column** for improved readability
+Automatically skips missing or invalid files
 
----
+🖥️ Dashboard (React + Tailwind)
 
-## 🧰 Installation
+Accordions per model type (Checkpoint / LoRA / Embedding)
 
-### Requirements
+Search & filter (client‑side, no backend required)
 
-* **Node.js** ≥ 18.x (includes npm)
-* **Python 3.12+** (for the scanner)
+Inline editing for CivitAI title, link, trigger tags, base model, provenance, etc.
 
-### Setup
+Local persistence of all edits via localStorage
 
-```bash
-# Clone repository
+Heuristic suitability detection (📷 Realistic / ✏️ Drawing)
+
+Favorites system and provenance toggle (Auto / Manual)
+
+Pagination (10 items per accordion)
+
+Responsive layout with a “Fit to window / Limit width” toggle
+
+Sticky header and sticky first column for improved readability
+
+🧰 Installation
+
+Requirements
+
+Node.js ≥ 18.x (includes npm)
+
+Python 3.12+
+
+🪟 Quick Start (Windows)
+
+ComfyDash can now be launched with a single double‑click.
+
+1️⃣ Clone and setup
+
 git clone https://github.com/max-dingsda/ComfyDash
 cd ComfyDash
-
-# Initialize frontend
 cd comfydash
 npm install
-npm run dev
-```
 
-Then open the dashboard locally at:
+2️⃣ Start ComfyDash
 
-```
-http://localhost:5173
-```
+Run the PowerShell script in the project root:
 
----
+start_comfydash.ps1
 
-## 🧪 Usage
+This will:
 
-1. Run the Python scanner:
+start the local Python API (mini_server.py)
 
-   ```bash
-   python main.py --root "<path_to_your_ComfyUI_folder>" --output "<your_ComfyDash_path>/catalog.json"
+start the Vite dev server (npm run dev)
 
-   ```
-2. In the dashboard, click **“Open catalog.json”** to load the file.
-3. Filter, sort, edit, and annotate your models.
-4. All changes are saved automatically in the browser (`localStorage`).
+open your browser at http://localhost:5173
 
----
+💡 Alternative: run start_comfydash.bat for an even quicker double‑click start.
 
-## 🧭 Roadmap
+🧪 Usage
 
-| Version | Focus       | Planned Enhancements                                              |
-| ------- | ----------- | ----------------------------------------------------------------- |
-| **1.0** | MVP Release | Stable, local version with all core functionality                 |
-| **1.1** | Usability   | run scanner from the UI                                           |
-| **1.2** | Scanner+    | Extract metadata from Safetensors (CivitAI title, triggers, etc.) |
-| **1.3** | Automation  | Integration of CivitAI api for automatic information retrieval    |
+Open the dashboard in your browser.
 
----
+Click “Open catalog.json” or “Fetch” to load a generated file.
 
-## 🧑‍💻 Contributing
+Use Search, Filters, and Accordions to explore your models.
+
+All edits (titles, tags, links) are stored locally in your browser.
+
+Running the scanner manually
+
+python main.py --root "<path_to_your_ComfyUI_folder>" --output "<your_ComfyDash_path>/catalog.json"
+
+Mini API (for integration)
+
+The local API mini_server.py allows the dashboard to run the scanner directly:
+
+python mini_server.py --host 127.0.0.1 --port 8000
+
+Endpoints:
+
+GET /health → { ok: true }
+
+POST /scan → { root: "F:\\AI\\ComfyUI", output: "optional\\catalog.json" }
+
+🧭 Roadmap
+
+Version
+
+Focus
+
+Planned Enhancements
+
+1.0
+
+MVP Release
+
+Stable, local version with all core functionality
+
+1.1
+
+Usability
+
+Run scanner from the UI (via “Scan now” button)
+
+1.2
+
+Scanner+
+
+Extract metadata from Safetensors (CivitAI title, triggers, etc.)
+
+1.3
+
+Automation
+
+Integration of CivitAI API for automatic information retrieval
+
+🧑‍💻 Contributing
 
 Pull requests and issues are welcome, especially for:
 
-* UI improvements (sticky headers, filters, icons)
-* Python scanner enhancements (metadata extraction, performance)
+UI improvements (sticky headers, filters, icons)
 
----
+Python scanner enhancements (metadata extraction, performance)
 
-## 📄 License
+📄 License
 
 MIT License © 2025 Michel Goumet
+
