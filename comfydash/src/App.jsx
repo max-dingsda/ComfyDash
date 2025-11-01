@@ -1,502 +1,425 @@
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-// ComfyDash – Dashboard (React SPA)
-// • Accordions per type (checkpoint, lora, embedding)
-// • Per‑type columns, inline edits (annotations persisted in localStorage)
-// • Responsive width toggle (Fit to window / Limit width)
-// • Sticky table header + sticky first column
-// • Pagination per section (10 rows/page)
-// Tailwind v3 compatible
+/*
+  ComfyDash v1.1 – Full UI + Scan + Annotations
+  ---------------------------------------------
+  - Summary cards, Suche/Sort
+  - Pro‑Typ Spalten (Checkpoint/LoRA/Embedding unterschiedlich)
+  - Lokale Annotationen (civitai_title, link, favorite, triggers, base override)
+  - Heuristik für Base‑Model, Suitability, Presets (nur Checkpoints)
+  - Scan via Mini‑Server (Detect API, Port 8000–8019)
+*/
 
-// ---------- Utils ----------
-const prettyBytes = (num) => {
-  if (typeof num !== "number" || !isFinite(num)) return "–";
-  const units = ["B","KB","MB","GB","TB"]; let i = 0; let n = num;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
-  return `${n.toFixed(n >= 100 ? 0 : n >= 10 ? 1 : 2)} ${units[i]}`;
+// ---------- small utils ----------
+const prettyBytes = (num = 0) => {
+  if (!Number.isFinite(num)) return "-";
+  const units = ["B", "KB", "MB", "GB", "TB"]; let i = 0;
+  while (num >= 1024 && i < units.length - 1) { num /= 1024; i++; }
+  return `${num.toFixed(num < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 };
-
-const timeAgo = (iso) => {
-  if (!iso) return "–";
-  const d = new Date(iso);
-  if (isNaN(d)) return "–";
-  const diff = Date.now() - d.getTime();
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return `${sec}s ago`;
-  const min = Math.floor(sec / 60);
-  if (min < 60) return `${min}m ago`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr}h ago`;
-  const day = Math.floor(hr / 24);
-  if (day < 30) return `${day}d ago`;
-  return d.toLocaleString();
-};
-
-function normalizeItem(raw) {
-  const get = (...keys) => keys.find((k) => k in raw);
-  const absPathKey = get("abs_path","absolute_path","path","file","full_path");
-  const relPathKey = get("rel_path","relative_path","relative","rel");
-  const nameKey = get("name","filename","file_name","basename");
-  const typeKey = get("type","ttype","kind","category");
-  const sizeKey = get("size","size_bytes","filesize");
-  const mtimeKey = get("modified_at","mtime_iso","mtime","last_modified");
-  const idKey = get("id","hash","stable_id");
-
-  const abs_path = absPathKey ? raw[absPathKey] : undefined;
-  const rel_path = relPathKey ? raw[relPathKey] : undefined;
-  const name = nameKey ? raw[nameKey] : (abs_path?.split(/\\|\//).pop() ?? rel_path?.split(/\\|\//).pop());
-  const type = (typeKey ? String(raw[typeKey]) : "unknown").toLowerCase();
-  const size = sizeKey ? Number(raw[sizeKey]) : undefined;
-  const modified_at = mtimeKey ? raw[mtimeKey] : undefined;
-  const id = idKey ? String(raw[idKey]) : undefined;
-
-  return { id, type, name, rel_path, abs_path, size, modified_at, _raw: raw };
-}
 
 const useLocalStorage = (key, initial) => {
-  const [val, setVal] = useState(() => {
-    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : initial; } catch { return initial; }
+  const [v, setV] = useState(() => {
+    const s = localStorage.getItem(key);
+    return s !== null ? s : initial;
   });
-  useEffect(() => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} }, [key, val]);
-  return [val, setVal];
+  useEffect(() => { localStorage.setItem(key, v ?? ""); }, [key, v]);
+  return [v, setV];
 };
 
-// Annotations in localStorage (MVP)
-const useAnnotations = () => {
-  const [ann, setAnn] = useLocalStorage("cd.annotations", {});
-  const get = (id) => (id && ann[id]) || {};
-  const set = (id, patch) => setAnn((prev) => ({ ...prev, [id]: { ...(prev[id]||{}), ...patch } }));
-  return { get, set };
+// ---------- annotations (localStorage) ----------
+const ANN_KEY = "cd.annotations";
+const annStore = {
+  _cache: null,
+  load() { if (this._cache) return this._cache; try { this._cache = JSON.parse(localStorage.getItem(ANN_KEY) || "{}"); } catch { this._cache = {}; } return this._cache; },
+  save() { localStorage.setItem(ANN_KEY, JSON.stringify(this._cache || {})); },
+  get(id) { return this.load()[id] || {}; },
+  set(id, patch) { const a = this.load(); a[id] = { ...(a[id]||{}), ...patch, _manual: true }; this.save(); },
+  isManual(id) { const a = this.get(id); return !!a._manual; },
 };
 
-const ensureUrl = (s) => {
-  if (!s) return s;
-  if (/^https?:\/\//i.test(s)) return s;
-  return "https://" + s;
+// ---------- inference helpers ----------
+const inferBaseModel = (name, existing) => {
+  if (existing && existing !== "") return existing;
+  const n = (name||"").toLowerCase();
+  if (n.includes("flux")) return "flux";
+  if (n.includes("pony") || n.includes("illustrious")) return "pony";
+  if ((n.includes("sdxl") || n.includes("juggernautxl") || n.includes("xl") || n.includes("refiner")) && !n.includes("1.5")) return "sdxl";
+  return "sd15";
 };
 
-// Heuristics for suitability (📷 / ✏️)
-function inferSuitabilityFromText(it){
-  const text = `${it.name||''} ${it.base_model||''} ${it.arch||''} ${it.triggers||''} ${it.civitai_title||''}`.toLowerCase();
-  const drawRe  = /(pony|illustrious|anime|illustration|drawing|comic|cartoon|manga)/;
-  const photoRe = /(realistic|photoreal|revanimated|dreamshaper|juggernaut)/;
-  const baseRe  = /(sdxl base|refiner|lcm)/;
-
-  let photo = photoRe.test(text);
-  let draw  = drawRe.test(text);
-  let confPhoto = photo ? 1 : 0;
-  let confDraw  = draw  ? 1 : 0;
-
-  if (baseRe.test(text)) {
-    photo = true; draw = true;
-    confPhoto = Math.max(confPhoto, 0.6);
-    confDraw  = Math.max(confDraw, 0.6);
-  }
-  return { photo, draw, confPhoto, confDraw };
-}
-
-// Small UI bits
-const BaseBadge = ({ model, conf }) => {
-  const label = (model||"unclear").toUpperCase();
-  const dot = typeof conf === 'number' ? (conf>=0.75?'●':conf>=0.4?'◐':'○') : '○';
-  return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border text-xs">
-      <span>{label}</span>
-      <span className="opacity-70">{dot}</span>
-    </span>
-  );
+const inferSuitabilityCheckpoint = (name) => {
+  const n = (name||"").toLowerCase();
+  const real = /(real|photo|photoreal|portrait|cinema|film)/.test(n);
+  const draw = /(anim|anime|toon|comic|illustr|cartoon|manga)/.test(n);
+  // default heuristics: if neither detected, be neutral (both false)
+  return { realistic: !!real, drawing: !!draw };
 };
 
-const Star = ({ on, onToggle }) => (
-  <button title={on?"Unfavorite":"Favorite"} onClick={onToggle} className={`text-lg ${on?"text-yellow-500":"text-gray-400"}`}>★</button>
-);
+const presetsForCheckpoint = (name) => {
+  const n = (name||"").toLowerCase();
+  if (n.includes("flux")) return { sampler: "euler_a", steps: 15, cfg: 3.5 };
+  if (n.includes("sdxl")) return { sampler: "dpmpp_2m", steps: 30, cfg: 5.5 };
+  if (n.includes("pony") || n.includes("illustrious")) return { sampler: "euler_a", steps: 22, cfg: 4.5 };
+  return { sampler: "euler_a", steps: 20, cfg: 7 };
+};
 
-const SortIcon = ({ dir }) => (
-  <span className="inline-block ml-1 opacity-60 select-none">{dir === "asc" ? "▲" : "▼"}</span>
-);
+// ---------- normalization ----------
+const normalizeItem = (raw) => {
+  const id = raw.id ?? `${raw.type}:${raw.name}`;
+  const name = raw.name ?? "(no name)";
+  const path = raw.path ?? "";
+  const file_name = path ? (path.split(/\\\\|\//).pop() || name) : name;
+  const base = inferBaseModel(name, raw.base);
+  return {
+    id,
+    type: raw.type ?? "unknown",
+    name,
+    file_name,
+    base,
+    size: raw.size ?? 0,
+    path,
+    mtime: raw.mtime ?? 0,
+    arch: raw.arch || "–",
+  };
+};
 
-function SuitIcon({ kind, value, conf = 0, onToggle }){
-  // kind: 'photo' | 'draw'
-  const icon = kind==='photo' ? '📷' : '✏️';
-  const on = !!value;
-  const ring = on ? (conf>=0.9? 'ring-2 ring-green-600' : 'ring ring-green-400') : 'ring ring-gray-300';
-  const mark = on ? '✓' : '✕';
-  const markColor = on ? 'text-green-600' : 'text-gray-400';
-  return (
-    <button onClick={onToggle} className={`inline-flex items-center gap-2 px-2 py-1 rounded border ${on? 'border-green-500 bg-green-50':'border-gray-300 bg-white'} ${ring}`} title={on? 'geeignet' : 'nicht primär geeignet'}>
-      <span>{icon}</span>
-      <span className={`text-xs ${markColor}`}>{mark}</span>
-    </button>
-  );
-}
-
-// ---------- App ----------
+// ---------- main component ----------
 export default function App() {
-  const [raw, setRaw] = useState(null);
+  // data
   const [items, setItems] = useState([]);
+  const [meta, setMeta] = useState({ comfyui_root: "", count: 0 });
+  const [loading, setLoading] = useState(false);
+
+  // query/sort
   const [query, setQuery] = useLocalStorage("cd.query", "");
-  const [types, setTypes] = useState([]);
-  const [url, setUrl] = useLocalStorage("cd.url", "");
-  const [wideMode, setWideMode] = useLocalStorage("cd.wide", false);
-  const fileRef = useRef(null);
+  const [sortBy, setSortBy] = useLocalStorage("cd.sort", "name"); // name|size|mtime
+  const [sortDir, setSortDir] = useLocalStorage("cd.dir", "asc"); // asc|desc
 
-  const ingest = (data) => {
-    setRaw(data);
-    const arr = Array.isArray(data) ? data : (Array.isArray(data.items) ? data.items : []);
-    const n = arr.map(normalizeItem);
-    setItems(n);
-    const typeSet = [...new Set(n.map((x) => x.type || "unknown"))];
-    setTypes(typeSet);
+  // API + Scan
+  const [apiBase, setApiBase] = useLocalStorage("cd.api.base", "http://127.0.0.1:8001");
+  const [scanRoot, setScanRoot] = useLocalStorage("cd.scan.root", "");
+  const [scanOut, setScanOut]   = useLocalStorage("cd.scan.out", "");
+  const [scanning, setScanning] = useState(false);
+
+  // force rerender helper
+  const [, setTick] = useState(0);
+  const bump = () => setTick(t => t + 1);
+
+  // ingest
+  const ingest = (json) => {
+    if (!json) return;
+    const data = json.items ? json : (json.data && json.data.items ? json.data : Array.isArray(json) ? { items: json } : { items: [] });
+    const normalized = (data.items || []).map(normalizeItem);
+    setItems(normalized);
+    setMeta({ comfyui_root: data.comfyui_root || "", count: normalized.length });
   };
 
-  const fetchUrl = async () => {
-    if (!url) return;
-    try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      ingest(data);
-    } catch (e) {
-      alert("Fetch failed: " + e.message);
+  // detect API
+  const detectApi = async () => {
+    const host = "http://127.0.0.1";
+    for (let p = 8000; p < 8020; p++) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 600);
+        const res = await fetch(`${host}:${p}/health`, { signal: ctrl.signal });
+        clearTimeout(t);
+        if (res.ok) { setApiBase(`${host}:${p}`); return; }
+      } catch {}
     }
+    alert("Keine laufende API gefunden (Ports 8000–8019). Starte mini_server.py?");
   };
 
-  const onFile = async (file) => {
+  // basic loaders
+  const scanNow = async () => {
+    if (!scanRoot) { alert("Bitte ComfyUI-Root angeben!"); return; }
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      ingest(data);
+      setScanning(true);
+      const res = await fetch(`${apiBase}/scan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root: scanRoot, output: scanOut || undefined }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.error || `HTTP ${res.status}`);
+      ingest(payload.data || payload);
     } catch (e) {
-      alert("Invalid JSON: " + e.message);
-    }
+      alert("Scan failed: " + e.message);
+    } finally { setScanning(false); }
   };
 
+  useEffect(() => { detectApi(); }, []);
+
+  // derived
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let result = items;
-    if (q) {
-      result = result.filter((it) =>
-        [it.name, it.type, it.rel_path, it.abs_path, it.id]
-          .filter(Boolean)
-          .join("\n")
-          .toLowerCase()
-          .includes(q)
-      );
-    }
-    return result;
-  }, [items, query]);
+    const sanitize = (s) => (s || "").trim().replace(/^["']+|["']+$/g, "");
+    const q = sanitize(query).toLowerCase();
+    let list = !q ? items : items.filter(it => (
+      it.name.toLowerCase().includes(q) ||
+      it.type.toLowerCase().includes(q) ||
+      (it.base || "").toLowerCase().includes(q) ||
+      (it.path || "").toLowerCase().includes(q)
+    ));
+    const dir = sortDir === "asc" ? 1 : -1;
+    list = [...list].sort((a, b) => {
+      const A = a[sortBy] ?? "", B = b[sortBy] ?? "";
+      if (A === B) return a.name.localeCompare(b.name) * dir;
+      if (typeof A === "number" && typeof B === "number") return (A - B) * dir;
+      return String(A).localeCompare(String(B)) * dir;
+    });
+    return list;
+  }, [items, query, sortBy, sortDir]);
 
-  return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
-      <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b">
-        <div className="mx-auto px-4 py-3 flex items-center gap-3">
-          <div className="text-xl font-semibold tracking-tight">ComfyDash</div>
-          <div className="ml-auto flex items-center gap-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="application/json"
-              className="hidden"
-              onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])}
-            />
-            <button
-              onClick={() => fileRef.current?.click()}
-              className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm text-sm"
-            >
-              Open catalog.json
-            </button>
-            <div className="flex items-center gap-2">
-              <input
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="http://localhost:8000/catalog.json"
-                className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm"
-              />
-              <button
-                onClick={fetchUrl}
-                className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm text-sm"
-              >
-                Fetch
-              </button>
-            </div>
-            <button
-              onClick={() => setWideMode(!wideMode)}
-              className="px-3 py-1.5 rounded-xl border border-gray-300 bg-white hover:bg-gray-50 shadow-sm text-sm"
-              title="Volle Fensterbreite umschalten"
-            >
-              {wideMode ? 'Limit width' : 'Fit to window'}
-            </button>
-          </div>
-        </div>
-      </header>
+  const groups = useMemo(() => {
+    const byType = { checkpoint: [], lora: [], embedding: [], other: [] };
+    for (const it of filtered) (byType[it.type] || byType.other).push(it);
+    return byType;
+  }, [filtered]);
 
-      <main className={`${wideMode ? "max-w-none 2xl:max-w-none" : "max-w-7xl xl:max-w-screen-2xl"} mx-auto px-4 py-6`}>
-        {/* Summary */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-          <SummaryCard label="Items" value={items.length} hint={raw ? "loaded" : "no data"} />
-          <SummaryCard label="Types" value={types.length} hint={types.join(", ") || "–"} />
-          <SummaryCard label="Filtered" value={filtered.length} />
-          <SummaryCard label="Search" value={query ? 'on' : 'off'} hint={query || '—'} />
-        </div>
-
-        {/* Search */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
-          <input
-            value={query}
-            onChange={(e) => { setQuery(e.target.value); }}
-            placeholder="Search name / path / id"
-            className="flex-1 min-w-[260px] px-3 py-2 rounded-xl border border-gray-300"
-          />
-          <button onClick={() => setQuery("")} className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-50 text-sm">Reset</button>
-        </div>
-
-        {/* Accordions */}
-        <div className="space-y-3">
-          {['checkpoint','lora','embedding'].filter(t => types.includes(t)).map((t) => (
-            <TypeSection key={t} type={t} items={filtered.filter(it => it.type === t)} />
-          ))}
-          {types.filter(t => !['checkpoint','lora','embedding'].includes(t)).map((t) => (
-            <TypeSection key={t} type={t} items={filtered.filter(it => it.type === t)} />
-          ))}
-        </div>
-      </main>
-
-      <footer className="py-8 text-center text-xs text-gray-500">ComfyDash • client-side viewer • no data leaves your machine</footer>
-    </div>
-  );
-}
-
-// ---------- UI bits ----------
-function SummaryCard({ label, value, hint }) {
-  return (
-    <div className="rounded-2xl border bg-white shadow-sm p-4">
-      <div className="text-sm text-gray-500">{label}</div>
-      <div className="text-2xl font-semibold mt-1">{value}</div>
-      {hint && <div className="text-xs text-gray-500 mt-1 truncate" title={hint}>{hint}</div>}
-    </div>
-  );
-}
-
-function TypeSection({ type, items }) {
-  // initially CLOSED
-  const [open, setOpen] = useLocalStorage(`cd.accordion.${type}`, false);
-  const count = items.length;
-  const ann = useAnnotations();
-
-  // Pagination (per type)
-  const PAGE_SIZE = 10;
-  const [page, setPage] = useLocalStorage(`cd.page.${type}`, 1);
-
-  const cols = useMemo(() => {
-    if (type === 'lora') {
-      return [
-        { key: 'name', label: 'Name' },
-        { key: 'civitai_title', label: 'CivitAI-Titel 🔗', editable: true },
-        { key: 'base_model', label: 'Base-Model', editable: true },
-        { key: 'triggers', label: 'Trigger / Tags', editable: true },
-        { key: 'civitai_link', label: 'CivitAI-Link', editable: true },
-        { key: 'provenance', label: 'Provenienz' },
-        { key: 'favorite', label: '★', kind: 'star' },
-      ];
-    }
-    if (type === 'embedding') {
-      return [
-        { key: 'name', label: 'Name' },
-        { key: 'civitai_title', label: 'CivitAI-Titel 🔗', editable: true },
-        { key: 'base_model', label: 'Base-Model', editable: true },
-        { key: 'civitai_link', label: 'CivitAI-Link', editable: true },
-        { key: 'provenance', label: 'Provenienz' },
-        { key: 'favorite', label: '★', kind: 'star' },
-      ];
-    }
-    if (type === 'checkpoint') {
-      return [
-        { key: 'name', label: 'Name' },
-        { key: 'civitai_title', label: 'CivitAI-Titel 🔗', editable: true },
-        { key: 'base_model', label: 'Base-Model', editable: true },
-        { key: 'arch', label: 'Architektur / Typ' },
-        { key: 'suit_photo', label: '📷 Realistisch', editable: true },
-        { key: 'suit_drawing', label: '✏️ Zeichnung', editable: true },
-        { key: 'preset_sampler', label: 'Sampler (Empf.)' },
-        { key: 'preset_steps', label: 'Steps' },
-        { key: 'preset_cfg', label: 'CFG' },
-        { key: 'civitai_link', label: 'CivitAI-Link', editable: true },
-        { key: 'provenance', label: 'Provenienz' },
-        { key: 'favorite', label: '★', kind: 'star' },
-      ];
-    }
-    return [ { key: 'name', label: 'Name' }, { key: 'id', label: 'ID' }, { key: 'rel_path', label: 'Path' } ];
-  }, [type]);
-
-  const merged = useMemo(() => items.map((it) => {
-    const a = ann.get(it.id);
-    const raw = it._raw || {};
-    return {
-      ...it,
-      civitai_title: a.civitai_title ?? raw.civitai_title ?? '',
-      civitai_link: a.civitai_link ?? raw.civitai_link ?? '',
-      base_model: a.base_model ?? raw.base_model ?? 'unclear',
-      confidence: a.confidence ?? raw.confidence ?? null,
-      triggers: a.triggers ?? raw.triggers ?? '',
-      provenance: raw.provenance === 'man' || a.manuallyEdited ? 'Manuell' : 'Auto',
-      arch: raw.arch || raw.architecture || '–',
-      suit_photo: a.suit_photo ?? raw?.presets?.suitability?.photo ?? false,
-      suit_drawing: a.suit_drawing ?? raw?.presets?.suitability?.drawing ?? false,
-      preset_sampler: raw?.presets?.sampler || '–',
-      preset_steps: raw?.presets?.steps ?? '–',
-      preset_cfg: raw?.presets?.cfg ?? '–',
-      favorite: !!a.favorite,
-    };
+  const counts = useMemo(() => ({
+    all: items.length,
+    checkpoint: items.filter(i => i.type === "checkpoint").length,
+    lora: items.filter(i => i.type === "lora").length,
+    embedding: items.filter(i => i.type === "embedding").length,
   }), [items]);
 
-  // clamp page when data changes
-  const pageCount = Math.max(1, Math.ceil(merged.length / PAGE_SIZE));
-  const pageSafe = Math.min(Math.max(1, page), pageCount);
-  const pageSlice = useMemo(() => {
-    const start = (pageSafe - 1) * PAGE_SIZE;
-    return merged.slice(start, start + PAGE_SIZE);
-  }, [merged, pageSafe]);
+  // ----- per‑type column defs -----
+  const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony"];
 
-  useEffect(() => {
-    if (page !== pageSafe) setPage(pageSafe);
-  }, [pageSafe, page, setPage]);
+  const CHECKPOINT_COLUMNS = [
+    { key: "file_name", label: "Name" },
+    { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
+        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annStore.get(it.id)} onChange={() => { annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "base", label: "Base‑Model", render: (it) => (
+        <SelectBase id={it.id} current={annStore.get(it.id).base || it.base} onChange={(v)=>{ annStore.set(it.id, { base: v }); bump(); }} opts={BASE_OPTIONS} />
+      ) },
+    { key: "arch", label: "Architektur / Typ" },
+    { key: "realistic", label: "📷 Realistisch", render: (it) => { const s = inferSuitabilityCheckpoint(it.name); return <Flag value={s.realistic} />; } },
+    { key: "drawing", label: "✏️ Zeichnung", render: (it) => { const s = inferSuitabilityCheckpoint(it.name); return <Flag value={s.drawing} />; } },
+    { key: "sampler", label: "Sampler (Empf.)", render: (it) => presetsForCheckpoint(it.name).sampler },
+    { key: "steps",   label: "Steps",          render: (it) => presetsForCheckpoint(it.name).steps },
+    { key: "cfg",     label: "CFG",            render: (it) => presetsForCheckpoint(it.name).cfg },
+    { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
+        <EditableUrl id={it.id} field="civitai_link" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=>{ const a=annStore.get(it.id); annStore.set(it.id,{ favorite: !a.favorite }); bump(); }} active={!!annStore.get(it.id).favorite} /> },
+  ];
 
-  return (
-    <section className="border rounded-2xl bg-white shadow-sm">
-      <div className="w-full flex items-center gap-2 px-4 py-3">
-        <button onClick={() => setOpen(!open)} className="text-left font-semibold text-lg capitalize">
-          {open ? '–' : '+'} {type}
-        </button>
-        <span className="ml-2 text-xs text-gray-500">{count} item{count!==1?'s':''}</span>
-        {open && (
-          <div className="ml-auto flex items-center gap-2 text-sm">
-            <span className="text-gray-500">Page {pageSafe}/{pageCount}</span>
-            <button disabled={pageSafe<=1} onClick={()=>setPage(1)} className="px-2 py-1 rounded border bg-white disabled:opacity-50">«</button>
-            <button disabled={pageSafe<=1} onClick={()=>setPage(p=>p-1)} className="px-2 py-1 rounded border bg-white disabled:opacity-50">‹</button>
-            <button disabled={pageSafe>=pageCount} onClick={()=>setPage(p=>p+1)} className="px-2 py-1 rounded border bg-white disabled:opacity-50">›</button>
-            <button disabled={pageSafe>=pageCount} onClick={()=>setPage(pageCount)} className="px-2 py-1 rounded border bg-white disabled:opacity-50">»</button>
-          </div>
-        )}
-      </div>
-      {open && (
-        <div className="overflow-x-auto border-t">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-100 text-gray-700 sticky top-0 z-20">
-              <tr>
-                {cols.map((c, i) => (
-                  <th
-                    key={c.key}
-                    className={`px-4 py-2 text-left ${c.right?'text-right':''} ${i===0 ? 'sticky left-0 z-30 bg-gray-100' : ''}`}
-                  >
-                    {c.label}
-                  </th>
+  const LORA_COLUMNS = [
+    { key: "file_name", label: "Name" },
+    { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
+        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annStore.get(it.id)} onChange={() => { annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "base", label: "Base‑Model", render: (it) => (
+        <SelectBase id={it.id} current={annStore.get(it.id).base || it.base} onChange={(v)=>{ annStore.set(it.id, { base: v }); bump(); }} opts={BASE_OPTIONS} />
+      ) },
+    { key: "triggers", label: "Trigger / Tags", render: (it) => (
+        <EditableText id={it.id} field="triggers" placeholder="Trigger, tags…" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
+        <EditableUrl id={it.id} field="civitai_link" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=>{ const a=annStore.get(it.id); annStore.set(it.id,{ favorite: !a.favorite }); bump(); }} active={!!annStore.get(it.id).favorite} /> },
+  ];
+
+  const EMB_COLUMNS = [
+    { key: "file_name", label: "Name" },
+    { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
+        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annStore.get(it.id)} onChange={() => { annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "base", label: "Base‑Model", render: (it) => (
+        <SelectBase id={it.id} current={annStore.get(it.id).base || it.base} onChange={(v)=>{ annStore.set(it.id, { base: v }); bump(); }} opts={BASE_OPTIONS} />
+      ) },
+    { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
+        <EditableUrl id={it.id} field="civitai_link" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+      ) },
+    { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=>{ const a=annStore.get(it.id); annStore.set(it.id,{ favorite: !a.favorite }); bump(); }} active={!!annStore.get(it.id).favorite} /> },
+  ];
+
+  const COLUMNS = { checkpoint: CHECKPOINT_COLUMNS, lora: LORA_COLUMNS, embedding: EMB_COLUMNS };
+
+  // ---------- components ----------
+  const Summary = () => (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <Card title="Total" value={counts.all} />
+      <Card title="Checkpoints" value={counts.checkpoint} />
+      <Card title="LoRAs" value={counts.lora} />
+      <Card title="Embeddings" value={counts.embedding} />
+    </div>
+  );
+
+  const Toolbar = () => (
+    <div className="flex flex-wrap items-center gap-2">
+      {/* API */}
+      <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base (z. B. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <button onClick={detectApi} className="px-3 py-1.5 rounded-xl border bg-white hover:bg-gray-50 text-sm">Detect API</button>
+
+      {/* Scan */}
+      <input value={scanRoot} onChange={(e) => setScanRoot(e.target.value)} placeholder="ComfyUI root (z. B. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <input value={scanOut}  onChange={(e) => setScanOut(e.target.value)}  placeholder="optional: …\\catalog.json" className="w-64 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <button onClick={scanNow} disabled={scanning} className="px-3 py-1.5 rounded-xl border bg-white hover:bg-gray-50 text-sm disabled:opacity-50">{scanning ? "Scanning…" : "Scan now"}</button>
+
+      {/* Search + Sort */}
+      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="px-2 py-1.5 rounded-lg border border-gray-300 text-sm">
+        <option value="name">Sort: Name</option>
+        <option value="size">Sort: Size</option>
+        <option value="mtime">Sort: Modified</option>
+      </select>
+      <select value={sortDir} onChange={(e) => setSortDir(e.target.value)} className="px-2 py-1.5 rounded-lg border border-gray-300 text-sm">
+        <option value="asc">Asc</option>
+        <option value="desc">Desc</option>
+      </select>
+    </div>
+  );
+
+  const Section = ({ title, type, items }) => (
+    <details open className="bg-white rounded-2xl shadow-sm border p-0">
+      <summary className="select-none cursor-pointer px-4 py-2 text-sm font-medium flex items-center gap-2">
+        <span>{title}</span>
+        <span className="inline-flex items-center justify-center text-xs bg-gray-100 border rounded-full px-2 py-0.5">{items.length}</span>
+      </summary>
+      {items.length === 0 ? (
+        <div className="px-4 py-3 text-gray-500 text-sm">Keine Einträge.</div>
+      ) : (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-gray-500 border-t">
+              {(COLUMNS[type] || []).map(col => (
+                <th key={col.key} className="px-4 py-2">{col.label}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((it) => (
+              <tr key={it.id} className="border-t hover:bg-gray-50 align-top">
+                {(COLUMNS[type] || []).map(col => (
+                  <td key={col.key} className="px-4 py-2">
+                    {renderCell(col, it)}
+                  </td>
                 ))}
               </tr>
-            </thead>
-            <tbody>
-              {pageSlice.map((it) => (
-                <tr key={(it.id||'')+(it.abs_path||it.rel_path||it.name)} className="border-t hover:bg-gray-50">
-                  {cols.map((c, i) => (
-                    <td
-                      key={c.key}
-                      className={`px-4 py-2 align-top ${c.right?'text-right tabular-nums':''} ${i===0 ? 'sticky left-0 z-10 bg-white' : ''}`}
-                    >
-                      {renderCellAdvanced(type, c, it, ann)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-              {!pageSlice.length && (
-                <tr><td colSpan={cols.length} className="px-4 py-6 text-center text-gray-500">No items.</td></tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+            ))}
+          </tbody>
+        </table>
       )}
-    </section>
+    </details>
+  );
+
+  const renderCell = (col, it) => {
+    if (col.render) return col.render(it);
+    if (col.key === "size") return prettyBytes(it.size);
+    if (col.key === "path") return <span title={it.path} className="truncate inline-block max-w-[48ch] align-middle">{it.path}</span>;
+    return it[col.key];
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      <header className="space-y-3">
+        <h1 className="text-2xl font-semibold">ComfyDash v1.1</h1>
+        <Toolbar />
+        <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
+        <div className="text-xs text-gray-500">Showing {filtered.length} of {items.length} items</div>
+        <Summary />
+      </header>
+
+      <main className="space-y-5">
+        {loading ? (
+          <div className="text-gray-500">Lädt …</div>
+        ) : (
+          <>
+            <Section title="Checkpoints" type="checkpoint" items={groups.checkpoint} />
+            <Section title="LoRAs" type="lora" items={groups.lora} />
+            <Section title="Embeddings" type="embedding" items={groups.embedding} />
+          </>
+        )}
+      </main>
+    </div>
   );
 }
 
-function renderCellAdvanced(type, col, it, ann){
-  const save = (patch) => ann.set(it.id, { ...patch, manuallyEdited: true });
-  switch(col.key){
-    case 'name':
-      return <span className="font-medium">{it.name || '(unnamed)'}</span>;
-    case 'civitai_title':
-      return (
-        <div className="flex items-center gap-2">
-          <input
-            className="px-2 py-1 border rounded w-56"
-            value={it.civitai_title}
-            placeholder="– kein Titel –"
-            onChange={(e)=>save({ civitai_title: e.target.value })}
-          />
-          {it.civitai_link && <a className="text-blue-600" href={ensureUrl(it.civitai_link)} target="_blank" rel="noreferrer">🔗</a>}
-        </div>
-      );
-    case 'base_model': {
-      const options = ['sd1.5','sdxl','pony','flux','unclear'];
-      return (
-        <div className="flex items-center gap-2">
-          <BaseBadge model={it.base_model} conf={it.confidence} />
-          <select className="px-2 py-1 border rounded" value={it.base_model} onChange={(e)=>save({ base_model: e.target.value })}>
-            {options.map(o=> <option key={o} value={o}>{o.toUpperCase()}</option>)}
-          </select>
-        </div>
-      );
-    }
-    case 'triggers':
-      return (
-        <input
-          className="px-2 py-1 border rounded w-72"
-          value={it.triggers}
-          placeholder="e.g. portrait, realistic"
-          onChange={(e)=>save({ triggers: e.target.value })}
-        />
-      );
-    case 'civitai_link':
-      return (
-        <input
-          className="px-2 py-1 border rounded w-64"
-          value={it.civitai_link}
-          placeholder="https://..."
-          onChange={(e)=>save({ civitai_link: e.target.value })}
-          onBlur={(e)=>save({ civitai_link: ensureUrl(e.target.value) })}
-        />
-      );
-    case 'provenance':
-      return <span className="text-xs px-2 py-0.5 rounded-full border">{it.provenance||'Auto'}</span>;
-    case 'favorite':
-      return <Star on={!!it.favorite} onToggle={()=>save({ favorite: !it.favorite })} />;
-    case 'arch':
-      return it.arch || '–';
-    case 'suit_photo':{
-      const a = ann.get(it.id);
-      const explicit = Object.prototype.hasOwnProperty.call(a,'suit_photo') || (it._raw?.presets?.suitability && Object.prototype.hasOwnProperty.call(it._raw.presets.suitability,'photo'));
-      const inf = inferSuitabilityFromText(it);
-      const val = explicit ? !!it.suit_photo : (it.suit_photo || inf.photo);
-      const conf = explicit ? 1 : inf.confPhoto;
-      return <SuitIcon kind="photo" value={val} conf={conf} onToggle={()=>save({suit_photo: !val})} />;
-    }
-    case 'suit_drawing':{
-      const a = ann.get(it.id);
-      const explicit = Object.prototype.hasOwnProperty.call(a,'suit_drawing') || (it._raw?.presets?.suitability && Object.prototype.hasOwnProperty.call(it._raw.presets.suitability,'drawing'));
-      const inf = inferSuitabilityFromText(it);
-      const val = explicit ? !!it.suit_drawing : (it.suit_drawing || inf.draw);
-      const conf = explicit ? 1 : inf.confDraw;
-      return <SuitIcon kind="draw" value={val} conf={conf} onToggle={()=>save({suit_drawing: !val})} />;
-    }
-    case 'preset_sampler':
-      return it.preset_sampler || '–';
-    case 'preset_steps':
-      return it.preset_steps ?? '–';
-    case 'preset_cfg':
-      return it.preset_cfg ?? '–';
-    case 'id':
-      return <span className="font-mono text-xs">{it.id || '–'}</span>;
-    case 'rel_path':
-      return <span className="font-mono text-xs">{it.rel_path || it.abs_path || '–'}</span>;
-    default:
-      return it[col.key] || '–';
-  }
+// ---------- small UI bits ----------
+function Card({ title, value }) {
+  return (
+    <div className="rounded-2xl border bg-white shadow-sm p-4">
+      <div className="text-xs text-gray-500">{title}</div>
+      <div className="text-2xl font-semibold leading-tight">{value}</div>
+    </div>
+  );
+}
+
+function Flag({ value }) {
+  return <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${value? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>{value? 'Ja' : '–'}</span>;
+}
+
+function Star({ active, onToggle }) {
+  return (
+    <button onClick={onToggle} className={`text-base ${active? 'text-yellow-500' : 'text-gray-400'} hover:scale-110`} title={active? 'Favorit entfernen' : 'Als Favorit markieren'}>★</button>
+  );
+}
+
+function SelectBase({ id, current, onChange, opts }) {
+  return (
+    <div className="flex items-center gap-2">
+      <select
+        value={current}
+        onChange={(e) => onChange(e.target.value)}
+        className="px-2 py-1 rounded-md border text-sm"
+      >
+        {opts.map((o) => (
+          <option key={o} value={o}>
+            {o}
+          </option>
+        ))}
+      </select>
+      <BaseBadge value={current} />
+    </div>
+  );
+}
+
+function EditableText({ id, field, placeholder, ann, onChange }) {
+  const val = ann?.[field] || "";
+  return (
+    <input value={val} placeholder={placeholder} onChange={(e)=>{ annStore.set(id, { [field]: e.target.value }); onChange?.(); }} className="w-full px-2 py-1 rounded-md border text-sm" />
+  );
+}
+
+function EditableUrl({ id, field, ann, onChange }) {
+  const v = ann?.[field] || "";
+  return (
+    <div className="flex items-center gap-2">
+      <input value={v} onChange={(e)=>{ annStore.set(id, { [field]: e.target.value }); onChange?.(); }} placeholder="https://…" className="w-full px-2 py-1 rounded-md border text-sm" />
+      {v ? <a href={v} target="_blank" className="text-blue-600 text-sm underline">Open</a> : null}
+    </div>
+  );
+}
+
+function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
+  const title = ann?.[fieldTitle] || "";
+  const link  = ann?.[fieldLink]  || "";
+  return (
+    <div className="flex items-center gap-2">
+      <input value={title} onChange={(e)=>{ annStore.set(id, { [fieldTitle]: e.target.value }); onChange?.(); }} placeholder="Titel…" className="w-full px-2 py-1 rounded-md border text-sm" />
+      {link ? <a href={link} target="_blank" className="text-blue-600 text-sm underline">Open</a> : null}
+    </div>
+  );
+}
+
+function BaseBadge({ value }) {
+  const v = (value || "").toLowerCase();
+  const conf = {
+    sd15:  { label: "SD 1.5", cls: "bg-blue-50 text-blue-700 border-blue-200" },
+    sdxl:  { label: "SDXL",   cls: "bg-purple-50 text-purple-700 border-purple-200" },
+    flux:  { label: "FLUX",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    pony:  { label: "PONY",    cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  }[v] || { label: value || "?", cls: "bg-gray-50 text-gray-600 border-gray-200" };
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] leading-4 ${conf.cls}`}>
+      {conf.label}
+    </span>
+  );
 }
