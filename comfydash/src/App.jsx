@@ -1,15 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 
-/*
-  ComfyDash v1.1 – Full UI + Scan + Annotations
-  ---------------------------------------------
-  - Summary cards, Suche/Sort
-  - Pro‑Typ Spalten (Checkpoint/LoRA/Embedding unterschiedlich)
-  - Lokale Annotationen (civitai_title, link, favorite, triggers, base override)
-  - Heuristik für Base‑Model, Suitability, Presets (nur Checkpoints)
-  - Scan via Mini‑Server (Detect API, Port 8000–8019)
-*/
-
 // ---------- small utils ----------
 const prettyBytes = (num = 0) => {
   if (!Number.isFinite(num)) return "-";
@@ -530,7 +520,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-10 bg-gray-50 p-6 space-y-3 border-b border-gray-200 shadow-sm">
-        <h1 className="text-2xl font-semibold">ComfyDash v1.1</h1>
+        <h1 className="text-2xl font-semibold">ComfyDash v1.2</h1>
         <Toolbar />
         <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
         <div className="text-xs text-gray-500">Showing {filtered.length} of {items.length} items</div>
