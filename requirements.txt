@@ -1,0 +1,5 @@
+# ComfyDash has no external Python dependencies
+# All required modules are part of the Python standard library (3.12+)
+# 
+# If you need to verify your Python installation:
+# python --version  # Should be 3.12 or higher
