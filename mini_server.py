@@ -1,11 +1,14 @@
-# mini_server.py — ComfyDash Mini-API (v1.1)
+# mini_server.py — ComfyDash Mini-API (v1.2)
 # Features
 # - GET  /health  -> { ok, ts, host, port }
 # - POST /scan    -> body { root, output? } -> { ok, data, warning? }
 # - CORS + OPTIONS support
-# - Robust scanner invocation: import main.scan(...) OR CLI fallback
-# - **Auto-port selection**: tries desired port (default 8000), then 8001..8019
-#   unless --strict is provided (then it fails instead of bumping).
+# - Robust scanner invocation: import Scanner/main.py OR CLI fallback
+# - Auto-port selection: tries desired port (default 8000), then 8001..8019 unless --strict
+# - v1.2 changes:
+#   * Default-Output: wenn "output" fehlt, schreibe nach <ComfyDash-Root>/catalog.json
+#   * Immer überschreiben (kein Beibehalten alter Dateien)
+#   * Scanner-Pfad tolerant: "Scanner/main.py" ODER "scanner/main.py"
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -15,12 +18,7 @@ import json
 import sys
 import importlib
 import subprocess
-import socket
 import importlib.util
-import hashlib
-import urllib.request
-import time
-from pathlib import Path
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -43,24 +41,30 @@ def write_file(path: Path, data: dict):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+
 def _load_scanner_module():
+    """Sucht Scanner/main.py (groß/klein) im Projekt und lädt ihn dyn. via importlib."""
     base_dir = Path(__file__).resolve().parent
-    scanner_py = (base_dir / "Scanner" / "main.py").resolve()
-    if not scanner_py.exists():
-        raise RuntimeError(f"Scanner file not found: {scanner_py}")
-    spec = importlib.util.spec_from_file_location("comfydash_scanner", str(scanner_py))
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot create import spec for {scanner_py}")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
-    return mod, scanner_py
+    candidates = [
+        (base_dir / "Scanner" / "main.py").resolve(),
+        (base_dir / "scanner" / "main.py").resolve(),
+    ]
+    for scanner_py in candidates:
+        if scanner_py.exists():
+            spec = importlib.util.spec_from_file_location("comfydash_scanner", str(scanner_py))
+            if spec is None or spec.loader is None:
+                continue
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+            return mod, scanner_py
+    raise RuntimeError("Scanner file not found (tried: %s)" % ", ".join(str(c) for c in candidates))
 
 
 def call_scanner_via_import(root: Path, output: Path | None):
     mod, _ = _load_scanner_module()
     for fn_name in ("scan", "run_scan", "do_scan"):
         fn = getattr(mod, fn_name, None)
-        if fn is None: 
+        if fn is None:
             continue
         try:
             return fn(str(root), str(output) if output else None)
@@ -78,40 +82,8 @@ def call_scanner_via_cli(root: Path, output: Path | None):
     return json.loads(proc.stdout)
 
 
-def calculate_file_hash(filepath: Path, algorithm='sha256', chunk_size=8192):
-    """Calculate hash of a file."""
-    hasher = hashlib.new(algorithm)
-    with open(filepath, 'rb') as f:
-        while chunk := f.read(chunk_size):
-            hasher.update(chunk)
-    return hasher.hexdigest().upper()
-
-
-def query_civitai_by_hash(file_hash: str):
-    """Query CivitAI API by file hash."""
-    url = f"https://civitai.com/api/v1/model-versions/by-hash/{file_hash}"
-    try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            data = json.loads(response.read())
-            return {
-                'found': True,
-                'model_id': data.get('modelId'),
-                'model_name': data.get('model', {}).get('name'),
-                'version_name': data.get('name'),
-                'url': f"https://civitai.com/models/{data.get('modelId')}",
-                'trained_words': data.get('trainedWords', []),
-                'base_model': data.get('baseModel'),
-            }
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return {'found': False, 'error': 'Not found on CivitAI'}
-        return {'found': False, 'error': f'HTTP {e.code}'}
-    except Exception as e:
-        return {'found': False, 'error': str(e)}
-
-
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ComfyDashMini/1.1"
+    server_version = "ComfyDashMini/1.2"
 
     # --- CORS helpers ---
     def _set_cors(self):
@@ -158,15 +130,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        
-        if path == "/scan":
-            return self._handle_scan()
-        elif path == "/enrich-civitai":
-            return self._handle_enrich_civitai()
-        
-        return self._send_json({"ok": False, "error": "Not found"}, status=404)
-    
-    def _handle_scan(self):
+        if path != "/scan":
+            return self._send_json({"ok": False, "error": "Not found"}, status=404)
+
         try:
             body = self._read_json()
         except ValueError as e:
@@ -178,11 +144,15 @@ class Handler(BaseHTTPRequestHandler):
         if not root or not isinstance(root, str):
             return self._send_json({"ok": False, "error": "Field 'root' (string) is required."}, status=400)
 
-        root_p = Path(root).expanduser()
+        root_p = Path(root).expanduser().resolve()
         if not root_p.exists():
             return self._send_json({"ok": False, "error": f"Root does not exist: {root_p}"}, status=400)
 
-        out_p = Path(output).expanduser() if isinstance(output, str) and output.strip() else None
+        # v1.2: Default-Output definieren, wenn nicht gesetzt → in ComfyDash-Root
+        if isinstance(output, str) and output.strip():
+            out_p = Path(output).expanduser().resolve()
+        else:
+            out_p = (Path(__file__).resolve().parent / "catalog.json").resolve()
 
         # Try Python import first, fallback to CLI
         try:
@@ -194,51 +164,20 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc()
             return self._send_json({"ok": False, "error": str(e)}, status=500)
 
-        # Optionally write here (if the scanner didn't already do it)
-        if out_p:
-            try:
-                if not out_p.exists():
-                    write_file(out_p, catalog)
-            except Exception as e:
-                return self._send_json({"ok": True, "warning": f"Could not write output: {e}", "data": catalog}, status=200)
+        # v1.2: Ausgabedatei **immer** überschreiben (best-effort)
+        try:
+            write_file(out_p, catalog)
+        except Exception as e:
+            return self._send_json({"ok": True, "warning": f"Could not write output: {e}", "data": catalog}, status=200)
 
         return self._send_json({"ok": True, "data": catalog}, status=200)
-    
-    def _handle_enrich_civitai(self):
-        """Handle CivitAI enrichment request."""
-        try:
-            body = self._read_json()
-        except ValueError as e:
-            return self._send_json({"ok": False, "error": str(e)}, status=400)
-        
-        file_path = body.get("path")
-        if not file_path:
-            return self._send_json({"ok": False, "error": "Field 'path' is required"}, status=400)
-        
-        filepath = Path(file_path)
-        if not filepath.exists():
-            return self._send_json({"ok": False, "error": f"File not found: {file_path}"}, status=400)
-        
-        try:
-            # Calculate hash
-            file_hash = calculate_file_hash(filepath)
-            
-            # Query CivitAI
-            result = query_civitai_by_hash(file_hash)
-            
-            return self._send_json({"ok": True, "data": result}, status=200)
-        except Exception as e:
-            import traceback; traceback.print_exc()
-            return self._send_json({"ok": False, "error": str(e)}, status=500)
 
 
 def try_bind(host: str, port: int):
-    """Return HTTPServer bound to (host, port) or raise OSError."""
     return HTTPServer((host, port), Handler)
 
 
 def pick_free_port(host: str, desired: int, strict: bool):
-    """Try desired port, then bump up to AUTO_PORT_MAX_TRIES. Returns (server, port)."""
     first_err = None
     for offset in range(AUTO_PORT_MAX_TRIES):
         p = desired + offset
@@ -248,11 +187,9 @@ def pick_free_port(host: str, desired: int, strict: bool):
         except OSError as e:
             if first_err is None:
                 first_err = e
-            # If strict and this was the desired port, stop immediately
             if strict:
                 break
             continue
-    # If we get here, binding failed for all tries
     raise first_err or OSError(f"Could not bind to any port from {desired} to {desired + AUTO_PORT_MAX_TRIES - 1}")
 
 
@@ -263,7 +200,6 @@ def main(argv=None):
     host, port = DEFAULT_HOST, DEFAULT_PORT
     strict = False
 
-    # naive args parsing: --host, --port, --strict
     i = 0
     while i < len(argv):
         a = argv[i]
