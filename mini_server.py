@@ -17,6 +17,9 @@ import importlib
 import subprocess
 import socket
 import importlib.util
+import hashlib
+import urllib.request
+import time
 from pathlib import Path
 
 DEFAULT_HOST = "127.0.0.1"
@@ -75,6 +78,38 @@ def call_scanner_via_cli(root: Path, output: Path | None):
     return json.loads(proc.stdout)
 
 
+def calculate_file_hash(filepath: Path, algorithm='sha256', chunk_size=8192):
+    """Calculate hash of a file."""
+    hasher = hashlib.new(algorithm)
+    with open(filepath, 'rb') as f:
+        while chunk := f.read(chunk_size):
+            hasher.update(chunk)
+    return hasher.hexdigest().upper()
+
+
+def query_civitai_by_hash(file_hash: str):
+    """Query CivitAI API by file hash."""
+    url = f"https://civitai.com/api/v1/model-versions/by-hash/{file_hash}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            data = json.loads(response.read())
+            return {
+                'found': True,
+                'model_id': data.get('modelId'),
+                'model_name': data.get('model', {}).get('name'),
+                'version_name': data.get('name'),
+                'url': f"https://civitai.com/models/{data.get('modelId')}",
+                'trained_words': data.get('trainedWords', []),
+                'base_model': data.get('baseModel'),
+            }
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return {'found': False, 'error': 'Not found on CivitAI'}
+        return {'found': False, 'error': f'HTTP {e.code}'}
+    except Exception as e:
+        return {'found': False, 'error': str(e)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "ComfyDashMini/1.1"
 
@@ -123,9 +158,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        if path != "/scan":
-            return self._send_json({"ok": False, "error": "Not found"}, status=404)
-
+        
+        if path == "/scan":
+            return self._handle_scan()
+        elif path == "/enrich-civitai":
+            return self._handle_enrich_civitai()
+        
+        return self._send_json({"ok": False, "error": "Not found"}, status=404)
+    
+    def _handle_scan(self):
         try:
             body = self._read_json()
         except ValueError as e:
@@ -162,6 +203,33 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json({"ok": True, "warning": f"Could not write output: {e}", "data": catalog}, status=200)
 
         return self._send_json({"ok": True, "data": catalog}, status=200)
+    
+    def _handle_enrich_civitai(self):
+        """Handle CivitAI enrichment request."""
+        try:
+            body = self._read_json()
+        except ValueError as e:
+            return self._send_json({"ok": False, "error": str(e)}, status=400)
+        
+        file_path = body.get("path")
+        if not file_path:
+            return self._send_json({"ok": False, "error": "Field 'path' is required"}, status=400)
+        
+        filepath = Path(file_path)
+        if not filepath.exists():
+            return self._send_json({"ok": False, "error": f"File not found: {file_path}"}, status=400)
+        
+        try:
+            # Calculate hash
+            file_hash = calculate_file_hash(filepath)
+            
+            # Query CivitAI
+            result = query_civitai_by_hash(file_hash)
+            
+            return self._send_json({"ok": True, "data": result}, status=200)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            return self._send_json({"ok": False, "error": str(e)}, status=500)
 
 
 def try_bind(host: str, port: int):

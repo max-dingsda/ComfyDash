@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 
 /*
   ComfyDash v1.1 – Full UI + Scan + Annotations
@@ -34,7 +34,14 @@ const annStore = {
   load() { if (this._cache) return this._cache; try { this._cache = JSON.parse(localStorage.getItem(ANN_KEY) || "{}"); } catch { this._cache = {}; } return this._cache; },
   save() { localStorage.setItem(ANN_KEY, JSON.stringify(this._cache || {})); },
   get(id) { return this.load()[id] || {}; },
-  set(id, patch) { const a = this.load(); a[id] = { ...(a[id]||{}), ...patch, _manual: true }; this.save(); },
+  set(id, patch) { 
+    const a = this.load(); 
+    // Only mark as manual if changing content fields (not favorite or base)
+    const isContentChange = Object.keys(patch).some(k => !['favorite', 'base'].includes(k));
+    a[id] = { ...(a[id]||{}), ...patch };
+    if (isContentChange) a[id]._manual = true;
+    this.save(); 
+  },
   isManual(id) { const a = this.get(id); return !!a._manual; },
 };
 
@@ -81,6 +88,10 @@ const normalizeItem = (raw) => {
     path,
     mtime: raw.mtime ?? 0,
     arch: raw.arch || "–",
+    // New metadata fields from scanner
+    trigger: raw.trigger || "",
+    tags: raw.tags || "",
+    civitai_url: raw.civitai_url || "",
   };
 };
 
@@ -101,10 +112,33 @@ export default function App() {
   const [scanRoot, setScanRoot] = useLocalStorage("cd.scan.root", "");
   const [scanOut, setScanOut]   = useLocalStorage("cd.scan.out", "");
   const [scanning, setScanning] = useState(false);
+  
+  // Selection for CivitAI enrichment
+  const selectedIdsRef = useRef(new Set());
+  const [selectionCount, setSelectionCount] = useState(0);
+  
+  const toggleSelection = (id) => {
+    if (selectedIdsRef.current.has(id)) {
+      selectedIdsRef.current.delete(id);
+    } else {
+      selectedIdsRef.current.add(id);
+    }
+    setSelectionCount(selectedIdsRef.current.size);
+  };
+  
+  // Accordion state (manual control)
+  const [accordionOpen, setAccordionOpen] = useState({
+    checkpoint: false,
+    lora: false,
+    embedding: false
+  });
 
   // force rerender helper
-  const [, setTick] = useState(0);
-  const bump = () => setTick(t => t + 1);
+  const [annotations, setAnnotations] = useState(() => annStore.load());
+  const updateAnnotation = (id, patch) => {
+    annStore.set(id, patch);
+    setAnnotations({ ...annStore.load() });
+  };
 
   // ingest
   const ingest = (json) => {
@@ -147,6 +181,80 @@ export default function App() {
       alert("Scan failed: " + e.message);
     } finally { setScanning(false); }
   };
+  
+  // CivitAI enrichment
+  const [enriching, setEnriching] = useState(false);
+  const [enrichProgress, setEnrichProgress] = useState({ current: 0, total: 0 });
+  
+  const enrichFromCivitAI = async () => {
+    const selectedItems = items.filter(it => selectedIdsRef.current.has(it.id));
+    if (selectedItems.length === 0) {
+      alert("Keine Items ausgewählt!");
+      return;
+    }
+    
+    if (!confirm(`${selectedItems.length} Items bei CivitAI suchen?\n\nWARNUNG: Gefundene Daten von CivitAI überschreiben alle manuell erfassten Daten (Titel, Link, Trigger).\n\nDies kann einige Minuten dauern.`)) {
+      return;
+    }
+    
+    setEnriching(true);
+    setEnrichProgress({ current: 0, total: selectedItems.length });
+    
+    const results = [];
+    
+    for (let i = 0; i < selectedItems.length; i++) {
+      const item = selectedItems[i];
+      setEnrichProgress({ current: i + 1, total: selectedItems.length });
+      
+      try {
+        const res = await fetch(`${apiBase}/enrich-civitai`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: item.path }),
+        });
+        
+        const payload = await res.json();
+        
+        if (res.ok && payload.data?.found) {
+          const data = payload.data;
+          // Update item with CivitAI data and reset manual flag
+          const updates = {
+            civitai_link: data.url,
+            civitai_title: data.model_name,
+            trigger: data.trained_words?.join(', ') || item.trigger,
+          };
+          // Store in annStore directly and remove _manual flag
+          const a = annStore.load();
+          a[item.id] = { ...(a[item.id] || {}), ...updates };
+          delete a[item.id]._manual; // Force back to Auto
+          annStore.save();
+          setAnnotations({ ...annStore.load() });
+          
+          results.push({ success: true, item: item.name, data });
+        } else {
+          results.push({ success: false, item: item.name, error: payload.data?.error || 'Unknown error' });
+        }
+        
+        // Rate limiting: 500ms delay between requests
+        if (i < selectedItems.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (e) {
+        results.push({ success: false, item: item.name, error: e.message });
+      }
+    }
+    
+    setEnriching(false);
+    setEnrichProgress({ current: 0, total: 0 });
+    
+    // Show summary
+    const successCount = results.filter(r => r.success).length;
+    alert(`Fertig!\n${successCount}/${selectedItems.length} Items gefunden auf CivitAI.`);
+    
+    // Clear selection
+    selectedIdsRef.current.clear();
+    setSelectionCount(0);
+  };
 
   useEffect(() => { detectApi(); }, []);
 
@@ -187,57 +295,123 @@ export default function App() {
   const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony"];
 
   const CHECKPOINT_COLUMNS = [
+    { key: "_select", label: "", render: (it) => (
+        <input 
+          type="checkbox" 
+          defaultChecked={selectedIdsRef.current.has(it.id)} 
+          onChange={() => toggleSelection(it.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="cursor-pointer"
+        />
+      ) },
     { key: "file_name", label: "Name" },
     { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
-        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annStore.get(it.id)} onChange={() => { annStore.set(it.id, {}); bump(); }} />
+        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base‑Model", render: (it) => (
-        <SelectBase id={it.id} current={annStore.get(it.id).base || it.base} onChange={(v)=>{ annStore.set(it.id, { base: v }); bump(); }} opts={BASE_OPTIONS} />
+        <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
-    { key: "arch", label: "Architektur / Typ" },
-    { key: "realistic", label: "📷 Realistisch", render: (it) => { const s = inferSuitabilityCheckpoint(it.name); return <Flag value={s.realistic} />; } },
-    { key: "drawing", label: "✏️ Zeichnung", render: (it) => { const s = inferSuitabilityCheckpoint(it.name); return <Flag value={s.drawing} />; } },
+    { key: "realistic", label: "📷 Realistisch", render: (it) => { 
+        const manualRealistic = (annotations[it.id] || {}).realistic;
+        const autoRealistic = inferSuitabilityCheckpoint(it.name).realistic;
+        const isChecked = manualRealistic !== undefined ? manualRealistic : autoRealistic;
+        return (
+          <input 
+            type="checkbox" 
+            checked={isChecked}
+            onChange={(e) => updateAnnotation(it.id, { realistic: e.target.checked })}
+            onClick={(e) => e.stopPropagation()}
+            className="cursor-pointer"
+          />
+        );
+      } },
+    { key: "drawing", label: "✏️ Zeichnung", render: (it) => { 
+        const manualDrawing = (annotations[it.id] || {}).drawing;
+        const autoDrawing = inferSuitabilityCheckpoint(it.name).drawing;
+        const isChecked = manualDrawing !== undefined ? manualDrawing : autoDrawing;
+        return (
+          <input 
+            type="checkbox" 
+            checked={isChecked}
+            onChange={(e) => updateAnnotation(it.id, { drawing: e.target.checked })}
+            onClick={(e) => e.stopPropagation()}
+            className="cursor-pointer"
+          />
+        );
+      } },
     { key: "sampler", label: "Sampler (Empf.)", render: (it) => presetsForCheckpoint(it.name).sampler },
-    { key: "steps",   label: "Steps",          render: (it) => presetsForCheckpoint(it.name).steps },
-    { key: "cfg",     label: "CFG",            render: (it) => presetsForCheckpoint(it.name).cfg },
+    { key: "steps",   label: "Steps (Empf.)",          render: (it) => presetsForCheckpoint(it.name).steps },
+    { key: "cfg",     label: "CFG (Empf.)",            render: (it) => presetsForCheckpoint(it.name).cfg },
     { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
-        <EditableUrl id={it.id} field="civitai_link" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+        <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
-    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=>{ const a=annStore.get(it.id); annStore.set(it.id,{ favorite: !a.favorite }); bump(); }} active={!!annStore.get(it.id).favorite} /> },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const LORA_COLUMNS = [
+    { key: "_select", label: "", render: (it) => (
+        <input 
+          type="checkbox" 
+          defaultChecked={selectedIdsRef.current.has(it.id)} 
+          onChange={() => toggleSelection(it.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="cursor-pointer"
+        />
+      ) },
     { key: "file_name", label: "Name" },
     { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
-        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annStore.get(it.id)} onChange={() => { annStore.set(it.id, {}); bump(); }} />
+        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base‑Model", render: (it) => (
-        <SelectBase id={it.id} current={annStore.get(it.id).base || it.base} onChange={(v)=>{ annStore.set(it.id, { base: v }); bump(); }} opts={BASE_OPTIONS} />
+        <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
-    { key: "triggers", label: "Trigger / Tags", render: (it) => (
-        <EditableText id={it.id} field="triggers" placeholder="Trigger, tags…" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+    { key: "trigger", label: "Trigger", render: (it) => {
+        const manualTrigger = (annotations[it.id] || {}).trigger;
+        const autoTrigger = it.trigger;
+        const displayTrigger = manualTrigger || autoTrigger || '';
+        return (
+          <input 
+            value={displayTrigger} 
+            onChange={(e)=> updateAnnotation(it.id, { trigger: e.target.value })} 
+            onClick={(e) => e.stopPropagation()} 
+            placeholder={autoTrigger ? `Auto: ${autoTrigger}` : "Trigger…"}
+            className="w-full px-2 py-1 rounded-md border text-sm" 
+          />
+        );
+      } },
+    { key: "tags", label: "Tags", render: (it) => (
+        <span className="text-xs text-gray-600" title={it.tags}>{it.tags ? (it.tags.length > 50 ? it.tags.substring(0, 50) + '…' : it.tags) : '–'}</span>
       ) },
     { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
-        <EditableUrl id={it.id} field="civitai_link" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+        <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
-    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=>{ const a=annStore.get(it.id); annStore.set(it.id,{ favorite: !a.favorite }); bump(); }} active={!!annStore.get(it.id).favorite} /> },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const EMB_COLUMNS = [
+    { key: "_select", label: "", render: (it) => (
+        <input 
+          type="checkbox" 
+          defaultChecked={selectedIdsRef.current.has(it.id)} 
+          onChange={() => toggleSelection(it.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="cursor-pointer"
+        />
+      ) },
     { key: "file_name", label: "Name" },
     { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
-        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annStore.get(it.id)} onChange={() => { annStore.set(it.id, {}); bump(); }} />
+        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base‑Model", render: (it) => (
-        <SelectBase id={it.id} current={annStore.get(it.id).base || it.base} onChange={(v)=>{ annStore.set(it.id, { base: v }); bump(); }} opts={BASE_OPTIONS} />
+        <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
     { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
-        <EditableUrl id={it.id} field="civitai_link" ann={annStore.get(it.id)} onChange={()=>{ annStore.set(it.id, {}); bump(); }} />
+        <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
-    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=>{ const a=annStore.get(it.id); annStore.set(it.id,{ favorite: !a.favorite }); bump(); }} active={!!annStore.get(it.id).favorite} /> },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const COLUMNS = { checkpoint: CHECKPOINT_COLUMNS, lora: LORA_COLUMNS, embedding: EMB_COLUMNS };
@@ -256,12 +430,15 @@ export default function App() {
     <div className="flex flex-wrap items-center gap-2">
       {/* API */}
       <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base (z. B. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <button onClick={detectApi} className="px-3 py-1.5 rounded-xl border bg-white hover:bg-gray-50 text-sm">Detect API</button>
+      <button onClick={detectApi} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium">Detect API</button>
 
       {/* Scan */}
       <input value={scanRoot} onChange={(e) => setScanRoot(e.target.value)} placeholder="ComfyUI root (z. B. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
       <input value={scanOut}  onChange={(e) => setScanOut(e.target.value)}  placeholder="optional: …\\catalog.json" className="w-64 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <button onClick={scanNow} disabled={scanning} className="px-3 py-1.5 rounded-xl border bg-white hover:bg-gray-50 text-sm disabled:opacity-50">{scanning ? "Scanning…" : "Scan now"}</button>
+      <button onClick={scanNow} disabled={scanning} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">{scanning ? "Scanning…" : "Scan now"}</button>
+      <button onClick={enrichFromCivitAI} disabled={selectionCount === 0 || enriching} className="px-3 py-1.5 rounded-xl border-2 border-green-500 bg-green-500 hover:bg-green-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+        {enriching ? `🔍 Searching... (${enrichProgress.current}/${enrichProgress.total})` : `🔍 Find selected on CivitAI (${selectionCount})`}
+      </button>
 
       {/* Search + Sort */}
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
@@ -277,38 +454,71 @@ export default function App() {
     </div>
   );
 
-  const Section = ({ title, type, items }) => (
-    <details open className="bg-white rounded-2xl shadow-sm border p-0">
-      <summary className="select-none cursor-pointer px-4 py-2 text-sm font-medium flex items-center gap-2">
-        <span>{title}</span>
-        <span className="inline-flex items-center justify-center text-xs bg-gray-100 border rounded-full px-2 py-0.5">{items.length}</span>
-      </summary>
-      {items.length === 0 ? (
-        <div className="px-4 py-3 text-gray-500 text-sm">Keine Einträge.</div>
-      ) : (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-gray-500 border-t">
-              {(COLUMNS[type] || []).map(col => (
-                <th key={col.key} className="px-4 py-2">{col.label}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it) => (
-              <tr key={it.id} className="border-t hover:bg-gray-50 align-top">
-                {(COLUMNS[type] || []).map(col => (
-                  <td key={col.key} className="px-4 py-2">
-                    {renderCell(col, it)}
-                  </td>
+  const Section = ({ title, type, items }) => {
+    const allIds = items.map(it => it.id);
+    const allSelected = allIds.length > 0 && allIds.every(id => selectedIdsRef.current.has(id));
+    
+    const toggleSelectAll = () => {
+      if (allSelected) {
+        // Deselect all
+        allIds.forEach(id => selectedIdsRef.current.delete(id));
+      } else {
+        // Select all
+        allIds.forEach(id => selectedIdsRef.current.add(id));
+      }
+      setSelectionCount(selectedIdsRef.current.size);
+    };
+    
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border p-0">
+        <div 
+          onClick={() => setAccordionOpen(prev => ({ ...prev, [type]: !prev[type] }))}
+          className="select-none cursor-pointer px-4 py-2 text-sm font-medium flex items-center gap-2 hover:bg-gray-50"
+        >
+          <span>{accordionOpen[type] ? '▼' : '▶'}</span>
+          <span>{title}</span>
+          <span className="inline-flex items-center justify-center text-xs bg-gray-100 border rounded-full px-2 py-0.5">{items.length}</span>
+        </div>
+        {accordionOpen[type] && (
+          items.length === 0 ? (
+            <div className="px-4 py-3 text-gray-500 text-sm">Keine Einträge.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-t">
+                  {(COLUMNS[type] || []).map(col => (
+                    <th key={col.key} className="px-4 py-2">
+                      {col.key === '_select' ? (
+                        <input 
+                          type="checkbox" 
+                          checked={allSelected}
+                          onChange={toggleSelectAll}
+                          onClick={(e) => e.stopPropagation()}
+                          className="cursor-pointer"
+                          title="Select All"
+                        />
+                      ) : col.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((it) => (
+                  <tr key={it.id} className="border-t hover:bg-gray-50 align-top">
+                    {(COLUMNS[type] || []).map(col => (
+                      <td key={col.key} className="px-4 py-2">
+                        {renderCell(col, it)}
+                      </td>
+                    ))}
+                  </tr>
                 ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </details>
-  );
+              </tbody>
+            </table>
+          )
+        )}
+      </div>
+    );
+  };
 
   const renderCell = (col, it) => {
     if (col.render) return col.render(it);
@@ -318,8 +528,8 @@ export default function App() {
   };
 
   return (
-    <div className="p-6 space-y-6">
-      <header className="space-y-3">
+    <div className="min-h-screen bg-gray-50">
+      <header className="sticky top-0 z-10 bg-gray-50 p-6 space-y-3 border-b border-gray-200 shadow-sm">
         <h1 className="text-2xl font-semibold">ComfyDash v1.1</h1>
         <Toolbar />
         <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
@@ -327,7 +537,7 @@ export default function App() {
         <Summary />
       </header>
 
-      <main className="space-y-5">
+      <main className="p-6 space-y-5">
         {loading ? (
           <div className="text-gray-500">Lädt …</div>
         ) : (
@@ -357,14 +567,19 @@ function Flag({ value }) {
 }
 
 function Star({ active, onToggle }) {
+  const handleClick = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onToggle();
+  };
   return (
-    <button onClick={onToggle} className={`text-base ${active? 'text-yellow-500' : 'text-gray-400'} hover:scale-110`} title={active? 'Favorit entfernen' : 'Als Favorit markieren'}>★</button>
+    <button onClick={handleClick} className={`text-base ${active? 'text-yellow-500' : 'text-gray-400'} hover:scale-110`} title={active? 'Favorit entfernen' : 'Als Favorit markieren'}>★</button>
   );
 }
 
 function SelectBase({ id, current, onChange, opts }) {
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
       <select
         value={current}
         onChange={(e) => onChange(e.target.value)}
@@ -384,15 +599,15 @@ function SelectBase({ id, current, onChange, opts }) {
 function EditableText({ id, field, placeholder, ann, onChange }) {
   const val = ann?.[field] || "";
   return (
-    <input value={val} placeholder={placeholder} onChange={(e)=>{ annStore.set(id, { [field]: e.target.value }); onChange?.(); }} className="w-full px-2 py-1 rounded-md border text-sm" />
+    <input value={val} placeholder={placeholder} onChange={(e)=> onChange({ [field]: e.target.value })} onClick={(e) => e.stopPropagation()} className="w-full px-2 py-1 rounded-md border text-sm" />
   );
 }
 
 function EditableUrl({ id, field, ann, onChange }) {
   const v = ann?.[field] || "";
   return (
-    <div className="flex items-center gap-2">
-      <input value={v} onChange={(e)=>{ annStore.set(id, { [field]: e.target.value }); onChange?.(); }} placeholder="https://…" className="w-full px-2 py-1 rounded-md border text-sm" />
+    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+      <input value={v} onChange={(e)=> onChange({ [field]: e.target.value })} placeholder="https://…" className="w-full px-2 py-1 rounded-md border text-sm" />
       {v ? <a href={v} target="_blank" className="text-blue-600 text-sm underline">Open</a> : null}
     </div>
   );
@@ -400,11 +615,9 @@ function EditableUrl({ id, field, ann, onChange }) {
 
 function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
   const title = ann?.[fieldTitle] || "";
-  const link  = ann?.[fieldLink]  || "";
   return (
-    <div className="flex items-center gap-2">
-      <input value={title} onChange={(e)=>{ annStore.set(id, { [fieldTitle]: e.target.value }); onChange?.(); }} placeholder="Titel…" className="w-full px-2 py-1 rounded-md border text-sm" />
-      {link ? <a href={link} target="_blank" className="text-blue-600 text-sm underline">Open</a> : null}
+    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+      <input value={title} onChange={(e)=> onChange({ [fieldTitle]: e.target.value })} placeholder="Titel…" className="w-full px-2 py-1 rounded-md border text-sm" />
     </div>
   );
 }

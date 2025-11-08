@@ -1,6 +1,6 @@
 # 🧩 ComfyDash – Local Model Catalog Dashboard
 
-ComfyDash helps you make sense of all your downloaded checkpoints, LoRAs, and embeddings by scanning your ComfyUI directories and presenting them in a clear, searchable dashboard. It’s a lightweight local catalog and management tool for ComfyUI model data.
+ComfyDash helps you make sense of all your downloaded checkpoints, LoRAs, and embeddings by scanning your ComfyUI directories and presenting them in a clear, searchable dashboard. It's a lightweight local catalog and management tool for ComfyUI model data.
 
 Do you know the issue? You download checkpoints, LoRAs, and embeddings, use them for a while, and later wonder what they actually do. ComfyDash was created to solve exactly that — giving you a clear overview of everything stored in your local ComfyUI setup.
 
@@ -8,7 +8,7 @@ ComfyDash combines a ⚙️ Python‑based scanner that generates a structured *
 
 ---
 
-## 🚀 Features (MVP 1.0)
+## 🚀 Features
 
 ### 🧩 Scanner (Python CLI)
 
@@ -16,18 +16,19 @@ ComfyDash combines a ⚙️ Python‑based scanner that generates a structured *
 * 🧾 Generates a unified **catalog.json** file
 * 📏 Captures file size, modification date, type, and stable ID
 * 🚫 Automatically skips missing or invalid files
+* 🔐 **NEW in v1.2:** Extracts metadata from Safetensors files (triggers, tags, base model, CivitAI URLs)
 
 ### 🖥️ Dashboard (React + Tailwind)
 
-* 🗂️ Accordions per model type (Checkpoint / LoRA / Embedding)
+* 🗂️ Accordions per model type (Checkpoint / LoRA / Embedding) with "Select All" functionality
 * 🔎 Search & filter (client‑side, no backend required)
 * ✏️ Inline editing for CivitAI title, link, trigger tags, base model, provenance, etc.
 * 💾 Local persistence of all edits via `localStorage`
-* 🧠 Heuristic suitability detection (📷 Realistic / ✏️ Drawing)
+* 🧠 Heuristic suitability detection (📷 Realistic / ✏️ Drawing) with manual override
 * ⭐ Favorites system and provenance toggle (Auto / Manual)
-* 📄 Pagination (10 items per accordion)
-* 🧍‍♂️ Responsive layout with “Fit to window / Limit width” toggle
-* 📌 Sticky header and sticky first column for improved readability
+* 📌 Sticky header for improved navigation
+* 🤖 **NEW in v1.2:** Automatic metadata extraction from Safetensors (trigger words, tags, base model)
+* 🌐 **NEW in v1.2:** CivitAI integration - search selected models on CivitAI and auto-fill metadata
 
 ---
 
@@ -71,15 +72,28 @@ This will:
 
 ## 🧪 Usage
 
-* 🌍 Open the dashboard in your browser.
-* 📂 Click **“Open catalog.json”** or **“Fetch”** to load a generated file.
-* 🔍 Use Search, Filters, and Accordions to explore your models.
-* 💾 All edits (titles, tags, links) are stored locally in your browser.
+### Basic Workflow
+
+1. 🌍 Open the dashboard in your browser
+2. 🔍 Click **"Detect API"** to find the running backend
+3. 📂 Enter your ComfyUI root path (e.g., `F:\AI\ComfyUI`)
+4. ⚡ Click **"Scan now"** to scan your models
+5. 🔎 Browse, search, and organize your models
+6. 💾 All edits are automatically saved in your browser
+
+### CivitAI Integration (v1.2)
+
+1. ✅ Select models using the checkboxes
+2. 🔍 Click **"Find selected on CivitAI"**
+3. ⏳ Wait for the search to complete (rate-limited to ~2 models/second)
+4. 🎉 Metadata (title, URL, triggers) is automatically filled in
+
+> **Note:** CivitAI search uses file hashes and may take several minutes for many models. Manual data will be overwritten by CivitAI data.
 
 ### 🐍 Running the scanner manually
 
 ```bash
-python main.py --root "<path_to_your_ComfyUI_folder>" --output "<your_ComfyDash_path>/catalog.json"
+python scanner/main.py --root "<path_to_your_ComfyUI_folder>" --output "catalog.json"
 ```
 
 ### 🌐 Mini API (for integration)
@@ -94,14 +108,33 @@ python mini_server.py --host 127.0.0.1 --port 8000
 
 * 🩺 **GET /health** → `{ ok: true }`
 * 🧭 **POST /scan** → `{ root: "F:\\AI\\ComfyUI", output: "optional\\catalog.json" }`
+* 🌐 **POST /enrich-civitai** → `{ path: "path/to/model.safetensors" }`
 
 ---
 
 ## 🧭 Roadmap
 
-| Version   | 🔍 Focus    | 🧩 Planned Enhancements                                                                                                                 |
-| --------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **1.0 ✅** | MVP Release | ✅ Stable, local version with all core functionality                                                                                     |
-| **1.1 ✅** | Usability   | 🧠 Run scanner from the UI (via “Scan now” button), API auto‑detect, local annotations, base model badges (SD 1.5 / SDXL / FLUX / PONY) |
-| **1.2**   | Scanner+    | 📦 Extract metadata from Safetensors (CivitAI title, triggers, etc.)                                                                    |
-| **1.3**   | Automation  | 🤖 Integration of CivitAI API for automatic information retrieval                                                                       |
+| Version       | 🔍 Focus    | 🧩 Enhancements                                                                                                                         |
+| ------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **1.0 ✅**     | MVP Release | ✅ Stable, local version with all core functionality                                                                                     |
+| **1.1 ✅**     | Usability   | ✅ Run scanner from UI, API auto‑detect, local annotations, base model badges (SD 1.5 / SDXL / FLUX / PONY)                             |
+| **1.2 ✅**     | Metadata    | ✅ Extract metadata from Safetensors, CivitAI API integration, manual override for suitability flags, sticky header, select all         |
+| **1.3**       | Enhancement | 🔜 Batch operations, export/import annotations, advanced filtering                                                                      |
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Feel free to open issues or submit pull requests.
+
+---
+
+## 📜 License
+
+MIT License - see LICENSE file for details.
+
+---
+
+## 🙏 Acknowledgments
+
+Built with ❤️ for the ComfyUI community.
