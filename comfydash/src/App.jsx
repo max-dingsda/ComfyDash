@@ -282,10 +282,10 @@ export default function App() {
   }), [items]);
 
   // ----- per‑type column defs -----
-  const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony"];
+  const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony", "cascade"];
 
   const CHECKPOINT_COLUMNS = [
-    { key: "_select", label: "", render: (it) => (
+    { key: "_select", label: "", width: "w-10", render: (it) => (
         <input 
           type="checkbox" 
           defaultChecked={selectedIdsRef.current.has(it.id)} 
@@ -294,8 +294,8 @@ export default function App() {
           className="cursor-pointer"
         />
       ) },
-    { key: "file_name", label: "Name" },
-    { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
+    { key: "file_name", label: "Path", width: "w-48" },
+    { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base‑Model", render: (it) => (
@@ -335,12 +335,11 @@ export default function App() {
     { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
-    { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
-    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
+    { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const LORA_COLUMNS = [
-    { key: "_select", label: "", render: (it) => (
+    { key: "_select", label: "", width: "w-10", render: (it) => (
         <input 
           type="checkbox" 
           defaultChecked={selectedIdsRef.current.has(it.id)} 
@@ -349,8 +348,8 @@ export default function App() {
           className="cursor-pointer"
         />
       ) },
-    { key: "file_name", label: "Name" },
-    { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
+    { key: "file_name", label: "Path", width: "w-48" },
+    { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base‑Model", render: (it) => (
@@ -376,12 +375,11 @@ export default function App() {
     { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
-    { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
-    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
+    { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const EMB_COLUMNS = [
-    { key: "_select", label: "", render: (it) => (
+    { key: "_select", label: "", width: "w-10", render: (it) => (
         <input 
           type="checkbox" 
           defaultChecked={selectedIdsRef.current.has(it.id)} 
@@ -390,8 +388,8 @@ export default function App() {
           className="cursor-pointer"
         />
       ) },
-    { key: "file_name", label: "Name" },
-    { key: "civitai_title", label: "CivitAI‑Titel 🔗", render: (it) => (
+    { key: "file_name", label: "Path", width: "w-48" },
+    { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base‑Model", render: (it) => (
@@ -400,8 +398,7 @@ export default function App() {
     { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
-    { key: "prov", label: "Provenienz", render: (it) => annStore.isManual(it.id)? "Manuell" : "Auto" },
-    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
+    { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const COLUMNS = { checkpoint: CHECKPOINT_COLUMNS, lora: LORA_COLUMNS, embedding: EMB_COLUMNS };
@@ -430,17 +427,8 @@ export default function App() {
         {enriching ? `🔍 Searching... (${enrichProgress.current}/${enrichProgress.total})` : `🔍 Find selected on CivitAI (${selectionCount})`}
       </button>
 
-      {/* Search + Sort */}
+      {/* Search */}
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="px-2 py-1.5 rounded-lg border border-gray-300 text-sm">
-        <option value="name">Sort: Name</option>
-        <option value="size">Sort: Size</option>
-        <option value="mtime">Sort: Modified</option>
-      </select>
-      <select value={sortDir} onChange={(e) => setSortDir(e.target.value)} className="px-2 py-1.5 rounded-lg border border-gray-300 text-sm">
-        <option value="asc">Asc</option>
-        <option value="desc">Desc</option>
-      </select>
     </div>
   );
 
@@ -457,6 +445,24 @@ export default function App() {
         allIds.forEach(id => selectedIdsRef.current.add(id));
       }
       setSelectionCount(selectedIdsRef.current.size);
+    };
+    
+    const handleSort = (key) => {
+      if (key === '_select' || key === 'fav') return; // Don't sort by these
+      
+      if (sortBy === key) {
+        // Toggle direction if same column
+        setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+      } else {
+        // New column, default to ascending
+        setSortBy(key);
+        setSortDir('asc');
+      }
+    };
+    
+    const getSortIndicator = (key) => {
+      if (sortBy !== key) return null;
+      return sortDir === 'asc' ? ' ↑' : ' ↓';
     };
     
     return (
@@ -477,7 +483,11 @@ export default function App() {
               <thead>
                 <tr className="text-left text-gray-500 border-t">
                   {(COLUMNS[type] || []).map(col => (
-                    <th key={col.key} className="px-4 py-2">
+                    <th 
+                      key={col.key} 
+                      className={`px-4 py-2 ${col.width || ''} ${col.key !== '_select' && col.key !== 'fav' ? 'cursor-pointer hover:bg-gray-100 select-none' : ''}`}
+                      onClick={() => handleSort(col.key)}
+                    >
                       {col.key === '_select' ? (
                         <input 
                           type="checkbox" 
@@ -487,7 +497,9 @@ export default function App() {
                           className="cursor-pointer"
                           title="Select All"
                         />
-                      ) : col.label}
+                      ) : (
+                        <span>{col.label}{getSortIndicator(col.key)}</span>
+                      )}
                     </th>
                   ))}
                 </tr>
@@ -496,7 +508,7 @@ export default function App() {
                 {items.map((it) => (
                   <tr key={it.id} className="border-t hover:bg-gray-50 align-top">
                     {(COLUMNS[type] || []).map(col => (
-                      <td key={col.key} className="px-4 py-2">
+                      <td key={col.key} className={`px-4 py-2 ${col.width || ''}`}>
                         {renderCell(col, it)}
                       </td>
                     ))}
@@ -520,7 +532,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-10 bg-gray-50 p-6 space-y-3 border-b border-gray-200 shadow-sm">
-        <h1 className="text-2xl font-semibold">ComfyDash v1.2</h1>
+        <h1 className="text-2xl font-semibold">ComfyDash v1.3</h1>
         <Toolbar />
         <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
         <div className="text-xs text-gray-500">Showing {filtered.length} of {items.length} items</div>
@@ -615,10 +627,11 @@ function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
 function BaseBadge({ value }) {
   const v = (value || "").toLowerCase();
   const conf = {
-    sd15:  { label: "SD 1.5", cls: "bg-blue-50 text-blue-700 border-blue-200" },
-    sdxl:  { label: "SDXL",   cls: "bg-purple-50 text-purple-700 border-purple-200" },
-    flux:  { label: "FLUX",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    pony:  { label: "PONY",    cls: "bg-amber-50 text-amber-700 border-amber-200" },
+    sd15:    { label: "SD 1.5",  cls: "bg-blue-50 text-blue-700 border-blue-200" },
+    sdxl:    { label: "SDXL",    cls: "bg-purple-50 text-purple-700 border-purple-200" },
+    flux:    { label: "FLUX",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    pony:    { label: "PONY",    cls: "bg-amber-50 text-amber-700 border-amber-200" },
+    cascade: { label: "Cascade", cls: "bg-pink-50 text-pink-700 border-pink-200" },
   }[v] || { label: value || "?", cls: "bg-gray-50 text-gray-600 border-gray-200" };
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] leading-4 ${conf.cls}`}>

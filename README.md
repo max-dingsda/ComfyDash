@@ -16,19 +16,23 @@ ComfyDash combines a ⚙️ Python‑based scanner that generates a structured *
 * 🧾 Generates a unified **catalog.json** file
 * 📏 Captures file size, modification date, type, and stable ID
 * 🚫 Automatically skips missing or invalid files
-* 🔐 **NEW in v1.2:** Extracts metadata from Safetensors files (triggers, tags, base model, CivitAI URLs)
+* 🔐 Extracts metadata from Safetensors files (triggers, tags, base model, CivitAI URLs)
+* 🎯 **NEW in v1.3:** Improved architecture detection for SDXL, Pony, Illustrious, and Cascade models
 
 ### 🖥️ Dashboard (React + Tailwind)
 
 * 🗂️ Accordions per model type (Checkpoint / LoRA / Embedding) with "Select All" functionality
 * 🔎 Search & filter (client‑side, no backend required)
-* ✏️ Inline editing for CivitAI title, link, trigger tags, base model, provenance, etc.
+* ✏️ Inline editing for model name, CivitAI link, trigger tags, base model, etc.
 * 💾 Local persistence of all edits via `localStorage`
 * 🧠 Heuristic suitability detection (📷 Realistic / ✏️ Drawing) with manual override
-* ⭐ Favorites system and provenance toggle (Auto / Manual)
+* ⭐ Favorites system
 * 📌 Sticky header for improved navigation
-* 🤖 **NEW in v1.2:** Automatic metadata extraction from Safetensors (trigger words, tags, base model)
-* 🌐 **NEW in v1.2:** CivitAI integration - search selected models on CivitAI and auto-fill metadata
+* 🤖 Automatic metadata extraction from Safetensors (trigger words, tags, base model)
+* 🌐 CivitAI integration - search selected models on CivitAI and auto-fill metadata
+* 🎨 **NEW in v1.3:** Optimized column layout - wider model names, compact file paths
+* 🖱️ **NEW in v1.3:** Click column headers to sort - visual indicators show sort direction
+* 🏗️ **NEW in v1.3:** Pony/Illustrious workflow template included
 
 ---
 
@@ -114,12 +118,14 @@ python mini_server.py --host 127.0.0.1 --port 8000
 
 ## 🧭 Roadmap
 
-| Version       | 🔍 Focus    | 🧩 Enhancements                                                                                                                         |
-| ------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| **1.0 ✅**     | MVP Release | ✅ Stable, local version with all core functionality                                                                                     |
-| **1.1 ✅**     | Usability   | ✅ Run scanner from UI, API auto‑detect, local annotations, base model badges (SD 1.5 / SDXL / FLUX / PONY)                             |
-| **1.2 ✅**     | Metadata    | ✅ Extract metadata from Safetensors, CivitAI API integration, manual override for suitability flags, sticky header, select all         |
-| **1.3**       | Enhancement | 🔜 Batch operations, export/import annotations, advanced filtering                                                                      |
+| Version | Focus | Enhancements |
+|:--------|:-------|:--------------|
+| **1.0 ✅** | MVP Release | Stable local version with all core functionality |
+| **1.1 ✅** | Usability | Run scanner from UI, API auto-detect, local annotations, base-model badges (SD 1.5 / SDXL / FLUX / PONY) |
+| **1.2 ✅** | Metadata | Extract Safetensors metadata, CivitAI API integration, manual override for suitability flags, sticky header, “Select All” |
+| **1.3 ✅** | UX & Polish | Improved architecture detection, sortable columns, optimized layout, workflow templates (prep for v2.0) |
+| **2.0** | Workflows | 🔜 Launch ComfyUI directly from ComfyDash |
+| **2.1** | Workflows | 🔜 Launch ComfyUI with preconfigured workflows |
 
 ---
 

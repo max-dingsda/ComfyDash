@@ -57,13 +57,39 @@ def fast_id(path: Path) -> str:
 
 
 def guess_base_model(name: str) -> str:
+    """Detect base model architecture from filename.
+    
+    Priority order:
+    1. Flux (most specific)
+    2. Cascade (very specific)
+    3. Pony/Illustrious (SDXL-based but distinct)
+    4. SDXL (various patterns)
+    5. SD1.5 (default)
+    """
     n = name.lower()
+    
+    # Flux (very specific)
     if any(k in n for k in ("flux", "flux.1", "flux1")):
         return "flux"
-    if "pony" in n or "illustrious" in n:
+    
+    # Cascade (very specific)
+    if any(k in n for k in ("cascade", "stage_b", "stage_c")):
+        return "cascade"
+    
+    # Pony/Illustrious (check before SDXL since they're SDXL-based but distinct)
+    if any(k in n for k in ("pony", "illustrious", "noobai")):
         return "pony"
-    if any(k in n for k in ("sdxl", "juggernautxl", "xlbase", "refiner")) and "1.5" not in n:
+    
+    # SDXL patterns - strong indicators first
+    if any(k in n for k in ("sdxl", "sd_xl", "sd-xl", "juggernautxl", "xlbase", "refiner")):
         return "sdxl"
+    
+    # Weaker indicator: "xl" somewhere in name (but not in SD1.5 context)
+    # This catches things like "hentaiMixXL" or "mixXL"
+    if "xl" in n and not any(k in n for k in ("1.5", "1-5", "v1-5", "v15")):
+        return "sdxl"
+    
+    # Default to SD1.5
     return "sd15"
 
 
