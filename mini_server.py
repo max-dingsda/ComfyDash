@@ -1,4 +1,4 @@
-# mini_server.py — ComfyDash Mini-API (v1.2)
+# mini_server.py — ComfyDash Mini-API (v1.3)
 # Features
 # - GET  /health  -> { ok, ts, host, port }
 # - POST /scan    -> body { root, output? } -> { ok, data, warning? }
@@ -9,6 +9,8 @@
 #   * Default-Output: wenn "output" fehlt, schreibe nach <ComfyDash-Root>/catalog.json
 #   * Immer überschreiben (kein Beibehalten alter Dateien)
 #   * Scanner-Pfad tolerant: "Scanner/main.py" ODER "scanner/main.py"
+# - v1.3 changes:
+#   * CivitAI integration moved to frontend (no /enrich-civitai endpoint needed)
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -83,7 +85,7 @@ def call_scanner_via_cli(root: Path, output: Path | None):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ComfyDashMini/1.2"
+    server_version = "ComfyDashMini/1.3"
 
     # --- CORS helpers ---
     def _set_cors(self):

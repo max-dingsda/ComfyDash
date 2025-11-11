@@ -8,6 +8,10 @@ const prettyBytes = (num = 0) => {
   return `${num.toFixed(num < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 };
 
+const [comfyUrl, setComfyUrl] = useLocalStorage("cd.comfy.url", "http://127.0.0.1:8188");
+const [startingComfy, setStartingComfy] = useState(false);
+
+
 const useLocalStorage = (key, initial) => {
   const [v, setV] = useState(() => {
     const s = localStorage.getItem(key);
@@ -171,6 +175,55 @@ export default function App() {
       alert("Scan failed: " + e.message);
     } finally { setScanning(false); }
   };
+
+  const checkComfyStatus = async () => {
+  try {
+    const u = new URL(comfyUrl);
+    const host = u.hostname || "127.0.0.1";
+    const port = u.port ? parseInt(u.port, 10) : 8188;
+    const res = await fetch(`${apiBase}/comfyui/status?host=${host}&port=${port}`, { cache: "no-store" });
+    const j = await res.json();
+    return res.ok && j.ok && !!j.running;
+  } catch {
+    return false;
+  }
+};
+
+const openComfyTab = () => {
+  window.open(comfyUrl, "_blank", "noopener,noreferrer");
+};
+
+const startOrOpenComfy = async () => {
+  if (!scanRoot) { alert("Bitte ComfyUI-Root angeben!"); return; }
+  setStartingComfy(true);
+
+  // 1) Läuft schon?
+  if (await checkComfyStatus()) { openComfyTab(); setStartingComfy(false); return; }
+
+  // 2) Starten
+  try {
+    const u = new URL(comfyUrl);
+    const port = u.port ? parseInt(u.port, 10) : 8188;
+    await fetch(`${apiBase}/comfyui/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ root: scanRoot, port }),
+    });
+  } catch (e) {
+    alert("Konnte ComfyUI nicht starten: " + (e?.message || e));
+    setStartingComfy(false);
+    return;
+  }
+
+  // 3) Poll bis erreichbar (max. 120s)
+  const t0 = Date.now();
+  while (Date.now() - t0 < 120_000) {
+    if (await checkComfyStatus()) { openComfyTab(); break; }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  setStartingComfy(false);
+};
+
   
   // CivitAI enrichment
   const [enriching, setEnriching] = useState(false);
