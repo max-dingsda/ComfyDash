@@ -33,6 +33,9 @@ ComfyDash combines a ⚙️ Python‑based scanner that generates a structured *
 * 🎨 **NEW in v1.3:** Optimized column layout - wider model names, compact file paths
 * 🖱️ **NEW in v1.3:** Click column headers to sort - visual indicators show sort direction
 * 🏗️ **NEW in v1.3:** Pony/Illustrious workflow template included
+* 🚀 **NEW in v2.0:** Launch ComfyUI directly from the dashboard with one click
+* 🐍 **NEW in v2.0:** Conda environment support for ComfyUI startup
+* ✅ **NEW in v2.0:** Real-time ComfyUI status detection and smart button switching
 
 ---
 
@@ -94,6 +97,16 @@ This will:
 
 > **Note:** CivitAI search uses file hashes and may take several minutes for many models. Manual data will be overwritten by CivitAI data.
 
+### ComfyUI Launch (v2.0)
+
+1. 📂 Enter your ComfyUI root path
+2. 🐍 (Optional) Specify a Conda environment name (e.g., "comfyui")
+3. 🚀 Click **"Open ComfyUI"** to start ComfyUI
+4. ⏳ Wait ~10-30 seconds for startup
+5. ✅ Green button appears when ready - click to open ComfyUI in new tab
+
+> **Note:** If you use a Conda environment for ComfyUI, enter the environment name. Leave empty to use system Python. ComfyUI will launch in a visible console window so you can monitor startup and errors.
+
 ### 🐍 Running the scanner manually
 
 ```bash
@@ -113,6 +126,8 @@ python mini_server.py --host 127.0.0.1 --port 8000
 * 🩺 **GET /health** → `{ ok: true }`
 * 🧭 **POST /scan** → `{ root: "F:\\AI\\ComfyUI", output: "optional\\catalog.json" }`
 * 🌐 **POST /enrich-civitai** → `{ path: "path/to/model.safetensors" }`
+* 🔍 **GET /comfyui/status** → `{ ok: true, running: true/false }`
+* 🚀 **POST /comfyui/start** → `{ root: "F:\\AI\\ComfyUI", port: 8188, conda_env: "optional" }`
 
 ---
 
@@ -122,10 +137,10 @@ python mini_server.py --host 127.0.0.1 --port 8000
 |:--------|:-------|:--------------|
 | **1.0 ✅** | MVP Release | Stable local version with all core functionality |
 | **1.1 ✅** | Usability | Run scanner from UI, API auto-detect, local annotations, base-model badges (SD 1.5 / SDXL / FLUX / PONY) |
-| **1.2 ✅** | Metadata | Extract Safetensors metadata, CivitAI API integration, manual override for suitability flags, sticky header, “Select All” |
+| **1.2 ✅** | Metadata | Extract Safetensors metadata, CivitAI API integration, manual override for suitability flags, sticky header, "Select All" |
 | **1.3 ✅** | UX & Polish | Improved architecture detection, sortable columns, optimized layout, workflow templates (prep for v2.0) |
-| **2.0** | Workflows | 🔜 Launch ComfyUI directly from ComfyDash |
-| **2.1** | Workflows | 🔜 Launch ComfyUI with preconfigured workflows |
+| **2.0 ✅** | Workflows | Launch ComfyUI directly from dashboard, conda environment support, real-time status detection |
+| **2.1** | Workflows | 🔜 Launch ComfyUI with preconfigured workflow templates |
 
 ---
 

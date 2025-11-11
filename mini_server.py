@@ -2,15 +2,18 @@
 # Features
 # - GET  /health  -> { ok, ts, host, port }
 # - POST /scan    -> body { root, output? } -> { ok, data, warning? }
+# - GET  /comfyui/status -> check if ComfyUI is running
+# - POST /comfyui/start  -> start ComfyUI process
 # - CORS + OPTIONS support
 # - Robust scanner invocation: import Scanner/main.py OR CLI fallback
 # - Auto-port selection: tries desired port (default 8000), then 8001..8019 unless --strict
 # - v1.2 changes:
-#   * Default-Output: wenn "output" fehlt, schreibe nach <ComfyDash-Root>/catalog.json
-#   * Immer überschreiben (kein Beibehalten alter Dateien)
-#   * Scanner-Pfad tolerant: "Scanner/main.py" ODER "scanner/main.py"
+#   * Default output: if "output" missing, write to <ComfyDash-Root>/catalog.json
+#   * Always overwrite (no keeping old files)
+#   * Scanner path tolerant: "Scanner/main.py" OR "scanner/main.py"
 # - v1.3 changes:
 #   * CivitAI integration moved to frontend (no /enrich-civitai endpoint needed)
+#   * ComfyUI launch support with conda environment option
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -21,6 +24,9 @@ import sys
 import importlib
 import subprocess
 import importlib.util
+import socket
+import urllib.request
+import urllib.error
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -45,7 +51,7 @@ def write_file(path: Path, data: dict):
 
 
 def _load_scanner_module():
-    """Sucht Scanner/main.py (groß/klein) im Projekt und lädt ihn dyn. via importlib."""
+    """Search for Scanner/main.py (case insensitive) in project and load dynamically via importlib."""
     base_dir = Path(__file__).resolve().parent
     candidates = [
         (base_dir / "Scanner" / "main.py").resolve(),
@@ -120,7 +126,9 @@ class Handler(BaseHTTPRequestHandler):
 
     # --- Routes ---
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
+        
         if path == "/health":
             return self._send_json({
                 "ok": True,
@@ -128,10 +136,96 @@ class Handler(BaseHTTPRequestHandler):
                 "host": SELECTED_HOST,
                 "port": SELECTED_PORT,
             })
+        
+        if path == "/comfyui/status":
+            # Parse query params
+            from urllib.parse import parse_qs
+            query = parse_qs(parsed.query)
+            host = query.get('host', ['127.0.0.1'])[0]
+            port = int(query.get('port', ['8188'])[0])
+            
+            # Check if ComfyUI is running
+            try:
+                url = f"http://{host}:{port}/object_info"
+                req = urllib.request.Request(url, headers={'User-Agent': 'ComfyDash'})
+                with urllib.request.urlopen(req, timeout=2) as response:
+                    # If we get here, something is responding
+                    if response.status == 200:
+                        # Try to verify it's actually ComfyUI
+                        return self._send_json({"ok": True, "running": True})
+            except (urllib.error.URLError, socket.timeout, ConnectionRefusedError):
+                pass
+            
+            return self._send_json({"ok": True, "running": False})
+        
         self._send_json({"ok": False, "error": "Not found"}, status=404)
 
     def do_POST(self):
         path = urlparse(self.path).path
+        
+        if path == "/comfyui/start":
+            try:
+                body = self._read_json()
+            except ValueError as e:
+                return self._send_json({"ok": False, "error": str(e)}, status=400)
+            
+            root = body.get("root")
+            port = body.get("port", 8188)
+            conda_env = body.get("conda_env")
+            
+            if not root:
+                return self._send_json({"ok": False, "error": "Field 'root' is required"}, status=400)
+            
+            root_p = Path(root).expanduser().resolve()
+            if not root_p.exists():
+                return self._send_json({"ok": False, "error": f"Root does not exist: {root_p}"}, status=400)
+            
+            # Find ComfyUI main.py
+            main_py = root_p / "main.py"
+            if not main_py.exists():
+                return self._send_json({"ok": False, "error": f"main.py not found in {root_p}"}, status=400)
+            
+            # Check if port is already in use by something else
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            port_available = sock.connect_ex(('127.0.0.1', port)) != 0
+            sock.close()
+            
+            if not port_available:
+                # Port is taken, check if it's ComfyUI
+                try:
+                    url = f"http://127.0.0.1:{port}/object_info"
+                    req = urllib.request.Request(url, headers={'User-Agent': 'ComfyDash'})
+                    with urllib.request.urlopen(req, timeout=2) as response:
+                        if response.status == 200:
+                            # ComfyUI is already running
+                            return self._send_json({"ok": True, "message": "ComfyUI already running"})
+                except:
+                    # Port is taken by something else
+                    return self._send_json({
+                        "ok": False, 
+                        "error": f"Port {port} is already in use by another process"
+                    }, status=409)
+            
+            # Start ComfyUI
+            try:
+                if conda_env:
+                    # Use conda run to execute in specific environment
+                    cmd = ["conda", "run", "-n", conda_env, "python", str(main_py), "--port", str(port)]
+                else:
+                    # Use system python
+                    cmd = [sys.executable, str(main_py), "--port", str(port)]
+                
+                # Start ComfyUI with visible window and output
+                subprocess.Popen(
+                    cmd,
+                    cwd=str(root_p),
+                    # Remove CREATE_NO_WINDOW to make ComfyUI visible
+                    # Remove stdout/stderr redirects to see output
+                )
+                return self._send_json({"ok": True, "message": "ComfyUI starting..."})
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"Failed to start ComfyUI: {e}"}, status=500)
+        
         if path != "/scan":
             return self._send_json({"ok": False, "error": "Not found"}, status=404)
 
@@ -150,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
         if not root_p.exists():
             return self._send_json({"ok": False, "error": f"Root does not exist: {root_p}"}, status=400)
 
-        # v1.2: Default-Output definieren, wenn nicht gesetzt → in ComfyDash-Root
+        # v1.2: Define default output if not set -> in ComfyDash root
         if isinstance(output, str) and output.strip():
             out_p = Path(output).expanduser().resolve()
         else:
@@ -166,7 +260,7 @@ class Handler(BaseHTTPRequestHandler):
             import traceback; traceback.print_exc()
             return self._send_json({"ok": False, "error": str(e)}, status=500)
 
-        # v1.2: Ausgabedatei **immer** überschreiben (best-effort)
+        # v1.2: Always overwrite output file (best effort)
         try:
             write_file(out_p, catalog)
         except Exception as e:

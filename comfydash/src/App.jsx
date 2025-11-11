@@ -8,10 +8,6 @@ const prettyBytes = (num = 0) => {
   return `${num.toFixed(num < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 };
 
-const [comfyUrl, setComfyUrl] = useLocalStorage("cd.comfy.url", "http://127.0.0.1:8188");
-const [startingComfy, setStartingComfy] = useState(false);
-
-
 const useLocalStorage = (key, initial) => {
   const [v, setV] = useState(() => {
     const s = localStorage.getItem(key);
@@ -95,6 +91,11 @@ export default function App() {
   const [items, setItems] = useState([]);
   const [meta, setMeta] = useState({ comfyui_root: "", count: 0 });
   const [loading, setLoading] = useState(false);
+  
+  // ComfyUI launch
+  const [comfyUrl, setComfyUrl] = useLocalStorage("cd.comfy.url", "http://127.0.0.1:8188");
+  const [startingComfy, setStartingComfy] = useState(false);
+  const [comfyRunning, setComfyRunning] = useState(false);
 
   // query/sort
   const [query, setQuery] = useLocalStorage("cd.query", "");
@@ -106,6 +107,7 @@ export default function App() {
   const [scanRoot, setScanRoot] = useLocalStorage("cd.scan.root", "");
   const [scanOut, setScanOut]   = useLocalStorage("cd.scan.out", "");
   const [scanning, setScanning] = useState(false);
+  const [condaEnv, setCondaEnv] = useLocalStorage("cd.conda.env", "");
   
   // Selection for CivitAI enrichment
   const selectedIdsRef = useRef(new Set());
@@ -155,12 +157,12 @@ export default function App() {
         if (res.ok) { setApiBase(`${host}:${p}`); return; }
       } catch {}
     }
-    alert("Keine laufende API gefunden (Ports 8000–8019). Starte mini_server.py?");
+    alert("No running API found (ports 8000–8019). Start mini_server.py?");
   };
 
   // basic loaders
   const scanNow = async () => {
-    if (!scanRoot) { alert("Bitte ComfyUI-Root angeben!"); return; }
+    if (!scanRoot) { alert("Please specify ComfyUI root!"); return; }
     try {
       setScanning(true);
       const res = await fetch(`${apiBase}/scan`, {
@@ -183,8 +185,11 @@ export default function App() {
     const port = u.port ? parseInt(u.port, 10) : 8188;
     const res = await fetch(`${apiBase}/comfyui/status?host=${host}&port=${port}`, { cache: "no-store" });
     const j = await res.json();
-    return res.ok && j.ok && !!j.running;
+    const running = res.ok && j.ok && !!j.running;
+    setComfyRunning(running);
+    return running;
   } catch {
+    setComfyRunning(false);
     return false;
   }
 };
@@ -194,34 +199,39 @@ const openComfyTab = () => {
 };
 
 const startOrOpenComfy = async () => {
-  if (!scanRoot) { alert("Bitte ComfyUI-Root angeben!"); return; }
+  if (!scanRoot) { alert("Please specify ComfyUI root first!"); return; }
   setStartingComfy(true);
 
-  // 1) Läuft schon?
+  // 1) Already running?
   if (await checkComfyStatus()) { openComfyTab(); setStartingComfy(false); return; }
 
-  // 2) Starten
+  // 2) Start ComfyUI
   try {
     const u = new URL(comfyUrl);
     const port = u.port ? parseInt(u.port, 10) : 8188;
     await fetch(`${apiBase}/comfyui/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ root: scanRoot, port }),
+      body: JSON.stringify({ root: scanRoot, port, conda_env: condaEnv || undefined }),
     });
   } catch (e) {
-    alert("Konnte ComfyUI nicht starten: " + (e?.message || e));
+    alert("Failed to start ComfyUI: " + (e?.message || e));
     setStartingComfy(false);
     return;
   }
 
-  // 3) Poll bis erreichbar (max. 120s)
+  // 3) Poll until reachable (max 120s)
   const t0 = Date.now();
   while (Date.now() - t0 < 120_000) {
-    if (await checkComfyStatus()) { openComfyTab(); break; }
+    if (await checkComfyStatus()) { 
+      setStartingComfy(false);
+      // Don't auto-open - show button instead to avoid popup blocker
+      return;
+    }
     await new Promise(r => setTimeout(r, 1000));
   }
   setStartingComfy(false);
+  alert("ComfyUI startup timeout - please check manually");
 };
 
   
@@ -232,11 +242,11 @@ const startOrOpenComfy = async () => {
   const enrichFromCivitAI = async () => {
     const selectedItems = items.filter(it => selectedIdsRef.current.has(it.id));
     if (selectedItems.length === 0) {
-      alert("Keine Items ausgewählt!");
+      alert("No items selected!");
       return;
     }
     
-    if (!confirm(`${selectedItems.length} Items bei CivitAI suchen?\n\nWARNUNG: Gefundene Daten von CivitAI überschreiben alle manuell erfassten Daten (Titel, Link, Trigger).\n\nDies kann einige Minuten dauern.`)) {
+    if (!confirm(`Search ${selectedItems.length} items on CivitAI?\n\nWARNING: Found data from CivitAI will overwrite all manually entered data (title, link, trigger).\n\nThis may take several minutes.`)) {
       return;
     }
     
@@ -292,14 +302,18 @@ const startOrOpenComfy = async () => {
     
     // Show summary
     const successCount = results.filter(r => r.success).length;
-    alert(`Fertig!\n${successCount}/${selectedItems.length} Items gefunden auf CivitAI.`);
+    alert(`Done!\n${successCount}/${selectedItems.length} items found on CivitAI.`);
     
     // Clear selection
     selectedIdsRef.current.clear();
     setSelectionCount(0);
   };
 
-  useEffect(() => { detectApi(); }, []);
+  useEffect(() => { 
+    detectApi(); 
+    // Check ComfyUI status on mount
+    checkComfyStatus();
+  }, []);
 
   // derived
   const filtered = useMemo(() => {
@@ -334,7 +348,7 @@ const startOrOpenComfy = async () => {
     embedding: items.filter(i => i.type === "embedding").length,
   }), [items]);
 
-  // ----- per‑type column defs -----
+  // ----- per-type column defs -----
   const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony", "cascade"];
 
   const CHECKPOINT_COLUMNS = [
@@ -351,10 +365,10 @@ const startOrOpenComfy = async () => {
     { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
-    { key: "base", label: "Base‑Model", render: (it) => (
+    { key: "base", label: "Base-Model", render: (it) => (
         <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
-    { key: "realistic", label: "📷 Realistisch", render: (it) => { 
+    { key: "realistic", label: "📷 Realistic", render: (it) => { 
         const manualRealistic = (annotations[it.id] || {}).realistic;
         const autoRealistic = inferSuitabilityCheckpoint(it.name).realistic;
         const isChecked = manualRealistic !== undefined ? manualRealistic : autoRealistic;
@@ -368,7 +382,7 @@ const startOrOpenComfy = async () => {
           />
         );
       } },
-    { key: "drawing", label: "✏️ Zeichnung", render: (it) => { 
+    { key: "drawing", label: "✏️ Drawing", render: (it) => { 
         const manualDrawing = (annotations[it.id] || {}).drawing;
         const autoDrawing = inferSuitabilityCheckpoint(it.name).drawing;
         const isChecked = manualDrawing !== undefined ? manualDrawing : autoDrawing;
@@ -382,10 +396,10 @@ const startOrOpenComfy = async () => {
           />
         );
       } },
-    { key: "sampler", label: "Sampler (Empf.)", render: (it) => presetsForCheckpoint(it.name).sampler },
-    { key: "steps",   label: "Steps (Empf.)",          render: (it) => presetsForCheckpoint(it.name).steps },
-    { key: "cfg",     label: "CFG (Empf.)",            render: (it) => presetsForCheckpoint(it.name).cfg },
-    { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
+    { key: "sampler", label: "Sampler (Rec.)", render: (it) => presetsForCheckpoint(it.name).sampler },
+    { key: "steps",   label: "Steps (Rec.)",          render: (it) => presetsForCheckpoint(it.name).steps },
+    { key: "cfg",     label: "CFG (Rec.)",            render: (it) => presetsForCheckpoint(it.name).cfg },
+    { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
@@ -405,7 +419,7 @@ const startOrOpenComfy = async () => {
     { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
-    { key: "base", label: "Base‑Model", render: (it) => (
+    { key: "base", label: "Base-Model", render: (it) => (
         <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
     { key: "trigger", label: "Trigger", render: (it) => {
@@ -417,7 +431,7 @@ const startOrOpenComfy = async () => {
             value={displayTrigger} 
             onChange={(e)=> updateAnnotation(it.id, { trigger: e.target.value })} 
             onClick={(e) => e.stopPropagation()} 
-            placeholder={autoTrigger ? `Auto: ${autoTrigger}` : "Trigger…"}
+            placeholder={autoTrigger ? `Auto: ${autoTrigger}` : "Trigger..."}
             className="w-full px-2 py-1 rounded-md border text-sm" 
           />
         );
@@ -425,7 +439,7 @@ const startOrOpenComfy = async () => {
     { key: "tags", label: "Tags", render: (it) => (
         <span className="text-xs text-gray-600" title={it.tags}>{it.tags ? (it.tags.length > 50 ? it.tags.substring(0, 50) + '…' : it.tags) : '–'}</span>
       ) },
-    { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
+    { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
@@ -445,10 +459,10 @@ const startOrOpenComfy = async () => {
     { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
-    { key: "base", label: "Base‑Model", render: (it) => (
+    { key: "base", label: "Base-Model", render: (it) => (
         <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
-    { key: "civitai_link", label: "CivitAI‑Link", render: (it) => (
+    { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
@@ -469,16 +483,31 @@ const startOrOpenComfy = async () => {
   const Toolbar = () => (
     <div className="flex flex-wrap items-center gap-2">
       {/* API */}
-      <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base (z. B. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base (e.g. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
       <button onClick={detectApi} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium">Detect API</button>
 
       {/* Scan */}
-      <input value={scanRoot} onChange={(e) => setScanRoot(e.target.value)} placeholder="ComfyUI root (z. B. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <input value={scanOut}  onChange={(e) => setScanOut(e.target.value)}  placeholder="optional: …\\catalog.json" className="w-64 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <button onClick={scanNow} disabled={scanning} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">{scanning ? "Scanning…" : "Scan now"}</button>
+      <input value={scanRoot} onChange={(e) => setScanRoot(e.target.value)} placeholder="ComfyUI root (e.g. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <input value={scanOut}  onChange={(e) => setScanOut(e.target.value)}  placeholder="optional: ...\\catalog.json" className="w-64 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <input value={condaEnv} onChange={(e) => setCondaEnv(e.target.value)} placeholder="optional: Conda Env (e.g. comfyui)" className="w-56 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <button onClick={scanNow} disabled={scanning} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">{scanning ? "Scanning..." : "Scan now"}</button>
       <button onClick={enrichFromCivitAI} disabled={selectionCount === 0 || enriching} className="px-3 py-1.5 rounded-xl border-2 border-green-500 bg-green-500 hover:bg-green-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
         {enriching ? `🔍 Searching... (${enrichProgress.current}/${enrichProgress.total})` : `🔍 Find selected on CivitAI (${selectionCount})`}
       </button>
+      
+      {/* Show either Start button OR Running button, not both */}
+      {!comfyRunning && (
+        <button onClick={startOrOpenComfy} disabled={startingComfy || !scanRoot} className="px-3 py-1.5 rounded-xl border-2 border-orange-500 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
+          {startingComfy ? "🚀 Starting ComfyUI..." : "🚀 Open ComfyUI"}
+        </button>
+      )}
+      
+      {/* ComfyUI Running Status */}
+      {comfyRunning && (
+        <button onClick={openComfyTab} className="px-3 py-1.5 rounded-xl border-2 border-green-600 bg-green-600 hover:bg-green-700 text-white text-sm font-medium">
+          ✅ ComfyUI is running - Click to open
+        </button>
+      )}
 
       {/* Search */}
       <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
@@ -530,7 +559,7 @@ const startOrOpenComfy = async () => {
         </div>
         {accordionOpen[type] && (
           items.length === 0 ? (
-            <div className="px-4 py-3 text-gray-500 text-sm">Keine Einträge.</div>
+            <div className="px-4 py-3 text-gray-500 text-sm">No entries.</div>
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -594,7 +623,7 @@ const startOrOpenComfy = async () => {
 
       <main className="p-6 space-y-5">
         {loading ? (
-          <div className="text-gray-500">Lädt …</div>
+          <div className="text-gray-500">Loading...</div>
         ) : (
           <>
             <Section title="Checkpoints" type="checkpoint" items={groups.checkpoint} />
@@ -618,7 +647,7 @@ function Card({ title, value }) {
 }
 
 function Flag({ value }) {
-  return <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${value? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>{value? 'Ja' : '–'}</span>;
+  return <span className={`inline-block text-xs px-2 py-0.5 rounded-full border ${value? 'bg-green-50 border-green-200 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500'}`}>{value? 'Yes' : '–'}</span>;
 }
 
 function Star({ active, onToggle }) {
@@ -628,7 +657,7 @@ function Star({ active, onToggle }) {
     onToggle();
   };
   return (
-    <button onClick={handleClick} className={`text-base ${active? 'text-yellow-500' : 'text-gray-400'} hover:scale-110`} title={active? 'Favorit entfernen' : 'Als Favorit markieren'}>★</button>
+    <button onClick={handleClick} className={`text-base ${active? 'text-yellow-500' : 'text-gray-400'} hover:scale-110`} title={active? 'Remove from favorites' : 'Mark as favorite'}>★</button>
   );
 }
 
@@ -672,7 +701,7 @@ function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
   const title = ann?.[fieldTitle] || "";
   return (
     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-      <input value={title} onChange={(e)=> onChange({ [fieldTitle]: e.target.value })} placeholder="Titel…" className="w-full px-2 py-1 rounded-md border text-sm" />
+      <input value={title} onChange={(e)=> onChange({ [fieldTitle]: e.target.value })} placeholder="Title..." className="w-full px-2 py-1 rounded-md border text-sm" />
     </div>
   );
 }
