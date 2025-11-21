@@ -30,6 +30,8 @@ ComfyDash combines a ⚙️ Python‑based scanner that generates a structured *
 * 📌 Sticky header for improved navigation
 * 🤖 Automatic metadata extraction from Safetensors (trigger words, tags, base model)
 * 🌐 CivitAI integration - search selected models on CivitAI and auto-fill metadata
+* 📊 **NEW in v2.0.1:** Visual progress overlay during CivitAI searches with file-by-file status
+* 📏 **NEW in v2.0.1:** Resizable columns - drag column borders to adjust widths, settings saved per model type
 * 🎨 **NEW in v1.3:** Optimized column layout - wider model names, compact file paths
 * 🖱️ **NEW in v1.3:** Click column headers to sort - visual indicators show sort direction
 * 🏗️ **NEW in v1.3:** Pony/Illustrious workflow template included
@@ -140,6 +142,7 @@ python mini_server.py --host 127.0.0.1 --port 8000
 | **1.2 ✅** | Metadata | Extract Safetensors metadata, CivitAI API integration, manual override for suitability flags, sticky header, "Select All" |
 | **1.3 ✅** | UX & Polish | Improved architecture detection, sortable columns, optimized layout, workflow templates (prep for v2.0) |
 | **2.0 ✅** | Workflows | Launch ComfyUI directly from dashboard, conda environment support, real-time status detection |
+| **2.0.1 ✅** | Bug Fixes & UX | Fixed CivitAI API integration (missing `/enrich-civitai` endpoint), added progress overlay for CivitAI searches, resizable columns with per-type persistence |
 | **2.1** | Workflows | 🔜 Launch ComfyUI with preconfigured workflow templates |
 
 ---

@@ -1,4 +1,4 @@
-# mini_server.py — ComfyDash Mini-API (v1.3)
+# mini_server.py — ComfyDash Mini-API (v1.3.1)
 # Features
 # - GET  /health  -> { ok, ts, host, port }
 # - POST /scan    -> body { root, output? } -> { ok, data, warning? }
@@ -14,6 +14,8 @@
 # - v1.3 changes:
 #   * CivitAI integration moved to frontend (no /enrich-civitai endpoint needed)
 #   * ComfyUI launch support with conda environment option
+# - v1.3.1 changes:
+#   * Added /enrich-civitai endpoint back for hash-based CivitAI model lookup
 
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
@@ -27,6 +29,7 @@ import importlib.util
 import socket
 import urllib.request
 import urllib.error
+import hashlib
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
@@ -91,7 +94,7 @@ def call_scanner_via_cli(root: Path, output: Path | None):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "ComfyDashMini/1.3"
+    server_version = "ComfyDashMini/1.3.1"
 
     # --- CORS helpers ---
     def _set_cors(self):
@@ -122,7 +125,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except (ConnectionAbortedError, BrokenPipeError):
+            # Client disconnected - ignore silently
+            pass
 
     # --- Routes ---
     def do_GET(self):
@@ -162,6 +169,70 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        
+        if path == "/enrich-civitai":
+            try:
+                body = self._read_json()
+            except ValueError as e:
+                return self._send_json({"ok": False, "error": str(e)}, status=400)
+            
+            file_path = body.get("path")
+            if not file_path:
+                return self._send_json({"ok": False, "error": "Field 'path' is required"}, status=400)
+            
+            file_p = Path(file_path).expanduser().resolve()
+            if not file_p.exists():
+                return self._send_json({"ok": False, "error": f"File does not exist: {file_p}"}, status=400)
+            
+            # Calculate SHA256 hash (full file - required for CivitAI)
+            try:
+                h = hashlib.sha256()
+                with file_p.open('rb') as f:
+                    # Read in chunks for memory efficiency
+                    chunk_size = 1024 * 1024  # 1MB chunks
+                    while True:
+                        chunk = f.read(chunk_size)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                file_hash = h.hexdigest().upper()  # Full hash, uppercase
+            except Exception as e:
+                return self._send_json({"ok": False, "error": f"Failed to hash file: {e}"}, status=500)
+            
+            # Query CivitAI API
+            try:
+                url = f"https://civitai.com/api/v1/model-versions/by-hash/{file_hash}"
+                req = urllib.request.Request(url, headers={'User-Agent': 'ComfyDash/1.3'})
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    if response.status == 200:
+                        data = json.loads(response.read().decode('utf-8'))
+                        return self._send_json({
+                            "ok": True,
+                            "data": {
+                                "found": True,
+                                "hash": file_hash,
+                                "model_name": data.get('model', {}).get('name', ''),
+                                "version_name": data.get('name', ''),
+                                "url": f"https://civitai.com/models/{data.get('modelId', '')}?modelVersionId={data.get('id', '')}",
+                                "trained_words": data.get('trainedWords', []),
+                                "base_model": data.get('baseModel', ''),
+                            }
+                        })
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    return self._send_json({
+                        "ok": True,
+                        "data": {"found": False, "hash": file_hash, "error": "Model not found on CivitAI"}
+                    })
+                return self._send_json({
+                    "ok": False,
+                    "error": f"CivitAI API error: {e.code}"
+                }, status=500)
+            except Exception as e:
+                return self._send_json({
+                    "ok": False,
+                    "error": f"Failed to query CivitAI: {e}"
+                }, status=500)
         
         if path == "/comfyui/start":
             try:

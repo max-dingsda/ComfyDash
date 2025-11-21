@@ -136,6 +136,75 @@ export default function App() {
     setAnnotations({ ...annStore.load() });
   };
 
+  // Column width management
+  const getDefaultWidths = (type) => {
+    const defaults = {
+      checkpoint: { _select: 40, file_name: 200, civitai_title: 400, base: 140, realistic: 100, drawing: 100, sampler: 140, steps: 100, cfg: 100, civitai_link: 120, fav: 50 },
+      lora: { _select: 40, file_name: 200, civitai_title: 400, base: 140, trigger: 250, tags: 200, civitai_link: 120, fav: 50 },
+      embedding: { _select: 40, file_name: 200, civitai_title: 400, base: 140, civitai_link: 120, fav: 50 }
+    };
+    return defaults[type] || {};
+  };
+
+  const [columnWidths, setColumnWidths] = useState(() => {
+    const stored = localStorage.getItem('cd.columnWidths');
+    if (stored) {
+      try {
+        return JSON.parse(stored);
+      } catch {
+        return {};
+      }
+    }
+    return {};
+  });
+
+  const getColumnWidth = (type, key) => {
+    return columnWidths[type]?.[key] || getDefaultWidths(type)[key] || 150;
+  };
+
+  const setColumnWidth = (type, key, width) => {
+    const newWidths = {
+      ...columnWidths,
+      [type]: {
+        ...(columnWidths[type] || {}),
+        [key]: Math.max(50, width) // Minimum 50px
+      }
+    };
+    setColumnWidths(newWidths);
+    localStorage.setItem('cd.columnWidths', JSON.stringify(newWidths));
+  };
+
+  // Resizing state
+  const [resizing, setResizing] = useState(null);
+
+  // Mouse handlers for column resizing
+  useEffect(() => {
+    if (!resizing) return;
+
+    const handleMouseMove = (e) => {
+      if (!resizing) return;
+      const delta = e.clientX - resizing.startX;
+      const newWidth = resizing.startWidth + delta;
+      setColumnWidth(resizing.type, resizing.key, newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setResizing(null);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizing]);
+
   // ingest
   const ingest = (json) => {
     if (!json) return;
@@ -151,13 +220,17 @@ export default function App() {
     for (let p = 8000; p < 8020; p++) {
       try {
         const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), 600);
+        const t = setTimeout(() => ctrl.abort(), 1500);
         const res = await fetch(`${host}:${p}/health`, { signal: ctrl.signal });
         clearTimeout(t);
-        if (res.ok) { setApiBase(`${host}:${p}`); return; }
+        if (res.ok) { 
+          setApiBase(`${host}:${p}`); 
+          return true;
+        }
       } catch {}
     }
-    alert("No running API found (ports 8000–8019). Start mini_server.py?");
+    // Don't show alert on initial load - only when user clicks Detect API button
+    return false;
   };
 
   // basic loaders
@@ -237,7 +310,7 @@ const startOrOpenComfy = async () => {
   
   // CivitAI enrichment
   const [enriching, setEnriching] = useState(false);
-  const [enrichProgress, setEnrichProgress] = useState({ current: 0, total: 0 });
+  const [enrichProgress, setEnrichProgress] = useState({ current: 0, total: 0, currentFile: '' });
   
   const enrichFromCivitAI = async () => {
     const selectedItems = items.filter(it => selectedIdsRef.current.has(it.id));
@@ -257,7 +330,7 @@ const startOrOpenComfy = async () => {
     
     for (let i = 0; i < selectedItems.length; i++) {
       const item = selectedItems[i];
-      setEnrichProgress({ current: i + 1, total: selectedItems.length });
+      setEnrichProgress({ current: i + 1, total: selectedItems.length, currentFile: item.name });
       
       try {
         const res = await fetch(`${apiBase}/enrich-civitai`, {
@@ -298,7 +371,7 @@ const startOrOpenComfy = async () => {
     }
     
     setEnriching(false);
-    setEnrichProgress({ current: 0, total: 0 });
+    setEnrichProgress({ current: 0, total: 0, currentFile: '' });
     
     // Show summary
     const successCount = results.filter(r => r.success).length;
@@ -352,7 +425,7 @@ const startOrOpenComfy = async () => {
   const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony", "cascade"];
 
   const CHECKPOINT_COLUMNS = [
-    { key: "_select", label: "", width: "w-10", render: (it) => (
+    { key: "_select", label: "", render: (it) => (
         <input 
           type="checkbox" 
           defaultChecked={selectedIdsRef.current.has(it.id)} 
@@ -361,8 +434,8 @@ const startOrOpenComfy = async () => {
           className="cursor-pointer"
         />
       ) },
-    { key: "file_name", label: "Path", width: "w-48" },
-    { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
+    { key: "file_name", label: "Path" },
+    { key: "civitai_title", label: "Name", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base-Model", render: (it) => (
@@ -402,11 +475,11 @@ const startOrOpenComfy = async () => {
     { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
-    { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const LORA_COLUMNS = [
-    { key: "_select", label: "", width: "w-10", render: (it) => (
+    { key: "_select", label: "", render: (it) => (
         <input 
           type="checkbox" 
           defaultChecked={selectedIdsRef.current.has(it.id)} 
@@ -415,8 +488,8 @@ const startOrOpenComfy = async () => {
           className="cursor-pointer"
         />
       ) },
-    { key: "file_name", label: "Path", width: "w-48" },
-    { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
+    { key: "file_name", label: "Path" },
+    { key: "civitai_title", label: "Name", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base-Model", render: (it) => (
@@ -442,11 +515,11 @@ const startOrOpenComfy = async () => {
     { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
-    { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const EMB_COLUMNS = [
-    { key: "_select", label: "", width: "w-10", render: (it) => (
+    { key: "_select", label: "", render: (it) => (
         <input 
           type="checkbox" 
           defaultChecked={selectedIdsRef.current.has(it.id)} 
@@ -455,8 +528,8 @@ const startOrOpenComfy = async () => {
           className="cursor-pointer"
         />
       ) },
-    { key: "file_name", label: "Path", width: "w-48" },
-    { key: "civitai_title", label: "Name", width: "w-80", render: (it) => (
+    { key: "file_name", label: "Path" },
+    { key: "civitai_title", label: "Name", render: (it) => (
         <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "base", label: "Base-Model", render: (it) => (
@@ -465,7 +538,7 @@ const startOrOpenComfy = async () => {
     { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
         <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
-    { key: "fav",  label: "★", width: "w-10", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
+    { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
 
   const COLUMNS = { checkpoint: CHECKPOINT_COLUMNS, lora: LORA_COLUMNS, embedding: EMB_COLUMNS };
@@ -484,7 +557,12 @@ const startOrOpenComfy = async () => {
     <div className="flex flex-wrap items-center gap-2">
       {/* API */}
       <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base (e.g. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <button onClick={detectApi} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium">Detect API</button>
+      <button onClick={async () => {
+        const found = await detectApi();
+        if (!found) {
+          alert("No running API found (ports 8000–8019). Start mini_server.py?");
+        }
+      }} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium">Detect API</button>
 
       {/* Scan */}
       <input value={scanRoot} onChange={(e) => setScanRoot(e.target.value)} placeholder="ComfyUI root (e.g. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
@@ -546,9 +624,20 @@ const startOrOpenComfy = async () => {
       if (sortBy !== key) return null;
       return sortDir === 'asc' ? ' ↑' : ' ↓';
     };
+
+    const startResize = (key, e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setResizing({
+        type,
+        key,
+        startX: e.clientX,
+        startWidth: getColumnWidth(type, key)
+      });
+    };
     
     return (
-      <div className="bg-white rounded-2xl shadow-sm border p-0">
+      <div className="bg-white rounded-2xl shadow-sm border p-0 overflow-hidden">
         <div 
           onClick={() => setAccordionOpen(prev => ({ ...prev, [type]: !prev[type] }))}
           className="select-none cursor-pointer px-4 py-2 text-sm font-medium flex items-center gap-2 hover:bg-gray-50"
@@ -561,43 +650,60 @@ const startOrOpenComfy = async () => {
           items.length === 0 ? (
             <div className="px-4 py-3 text-gray-500 text-sm">No entries.</div>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500 border-t">
-                  {(COLUMNS[type] || []).map(col => (
-                    <th 
-                      key={col.key} 
-                      className={`px-4 py-2 ${col.width || ''} ${col.key !== '_select' && col.key !== 'fav' ? 'cursor-pointer hover:bg-gray-100 select-none' : ''}`}
-                      onClick={() => handleSort(col.key)}
-                    >
-                      {col.key === '_select' ? (
-                        <input 
-                          type="checkbox" 
-                          checked={allSelected}
-                          onChange={toggleSelectAll}
-                          onClick={(e) => e.stopPropagation()}
-                          className="cursor-pointer"
-                          title="Select All"
-                        />
-                      ) : (
-                        <span>{col.label}{getSortIndicator(col.key)}</span>
-                      )}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((it) => (
-                  <tr key={it.id} className="border-t hover:bg-gray-50 align-top">
-                    {(COLUMNS[type] || []).map(col => (
-                      <td key={col.key} className={`px-4 py-2 ${col.width || ''}`}>
-                        {renderCell(col, it)}
-                      </td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" style={{ tableLayout: 'fixed' }}>
+                <thead>
+                  <tr className="text-left text-gray-500 border-t">
+                    {(COLUMNS[type] || []).map((col, idx) => (
+                      <th 
+                        key={col.key} 
+                        className={`px-4 py-2 relative ${col.key !== '_select' && col.key !== 'fav' ? 'cursor-pointer hover:bg-gray-100 select-none' : ''}`}
+                        style={{ width: `${getColumnWidth(type, col.key)}px` }}
+                        onClick={() => handleSort(col.key)}
+                      >
+                        {col.key === '_select' ? (
+                          <input 
+                            type="checkbox" 
+                            checked={allSelected}
+                            onChange={toggleSelectAll}
+                            onClick={(e) => e.stopPropagation()}
+                            className="cursor-pointer"
+                            title="Select All"
+                          />
+                        ) : (
+                          <span>{col.label}{getSortIndicator(col.key)}</span>
+                        )}
+                        {/* Resize handle */}
+                        {idx < (COLUMNS[type] || []).length - 1 && (
+                          <div
+                            className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-blue-400 group"
+                            onMouseDown={(e) => startResize(col.key, e)}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="h-full w-1 group-hover:bg-blue-400" />
+                          </div>
+                        )}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {items.map((it) => (
+                    <tr key={it.id} className="border-t hover:bg-gray-50 align-top">
+                      {(COLUMNS[type] || []).map(col => (
+                        <td 
+                          key={col.key} 
+                          className="px-4 py-2 overflow-hidden"
+                          style={{ width: `${getColumnWidth(type, col.key)}px` }}
+                        >
+                          {renderCell(col, it)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )
         )}
       </div>
@@ -607,14 +713,47 @@ const startOrOpenComfy = async () => {
   const renderCell = (col, it) => {
     if (col.render) return col.render(it);
     if (col.key === "size") return prettyBytes(it.size);
-    if (col.key === "path") return <span title={it.path} className="truncate inline-block max-w-[48ch] align-middle">{it.path}</span>;
+    if (col.key === "path") return <span title={it.path} className="truncate inline-block max-w-full align-middle">{it.path}</span>;
     return it[col.key];
   };
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* CivitAI Enrichment Progress Overlay */}
+      {enriching && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl p-8 max-w-lg w-full mx-4">
+            <h2 className="text-xl font-semibold mb-4">🔍 Searching on CivitAI...</h2>
+            
+            <div className="mb-4">
+              <div className="flex justify-between text-sm text-gray-600 mb-2">
+                <span>Progress: {enrichProgress.current} / {enrichProgress.total}</span>
+                <span>{Math.round((enrichProgress.current / enrichProgress.total) * 100)}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3 overflow-hidden">
+                <div 
+                  className="bg-blue-500 h-full transition-all duration-300 ease-out"
+                  style={{ width: `${(enrichProgress.current / enrichProgress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+            
+            <div className="text-sm text-gray-600 mt-4">
+              <div className="font-medium mb-1">Current file:</div>
+              <div className="bg-gray-50 rounded-lg p-3 text-xs break-all border">
+                {enrichProgress.currentFile}
+              </div>
+            </div>
+            
+            <div className="mt-6 text-xs text-gray-500 text-center">
+              Please wait... This may take several minutes.
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="sticky top-0 z-10 bg-gray-50 p-6 space-y-3 border-b border-gray-200 shadow-sm">
-        <h1 className="text-2xl font-semibold">ComfyDash v1.3</h1>
+        <h1 className="text-2xl font-semibold">ComfyDash v2.0</h1>
         <Toolbar />
         <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
         <div className="text-xs text-gray-500">Showing {filtered.length} of {items.length} items</div>
