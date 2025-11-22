@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useRef } from "react";
+import React, { useEffect, useMemo, useState, useRef } from "react";
 
 // ---------- small utils ----------
 const prettyBytes = (num = 0) => {
@@ -400,13 +400,25 @@ const startOrOpenComfy = async () => {
     ));
     const dir = sortDir === "asc" ? 1 : -1;
     list = [...list].sort((a, b) => {
-      const A = a[sortBy] ?? "", B = b[sortBy] ?? "";
-      if (A === B) return a.name.localeCompare(b.name) * dir;
+      // Get value from annotations if available, otherwise from item
+      const getVal = (item, key) => {
+        const ann = annotations[item.id] || {};
+        if (key === 'civitai_title') return ann.civitai_title || item.name || "";
+        if (key === 'base') return ann.base || item.base || "";
+        if (key === 'trigger') return ann.trigger || item.trigger || "";
+        return item[key] ?? "";
+      };
+      
+      const A = getVal(a, sortBy);
+      const B = getVal(b, sortBy);
+      
+      if (A === B) return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) * dir;
       if (typeof A === "number" && typeof B === "number") return (A - B) * dir;
-      return String(A).localeCompare(String(B)) * dir;
+      // Case-insensitive string comparison
+      return String(A).localeCompare(String(B), undefined, { sensitivity: 'base' }) * dir;
     });
     return list;
-  }, [items, query, sortBy, sortDir]);
+  }, [items, query, sortBy, sortDir, annotations]);
 
   const groups = useMemo(() => {
     const byType = { checkpoint: [], lora: [], embedding: [], other: [] };
@@ -495,20 +507,14 @@ const startOrOpenComfy = async () => {
     { key: "base", label: "Base-Model", render: (it) => (
         <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
       ) },
-    { key: "trigger", label: "Trigger", render: (it) => {
-        const manualTrigger = (annotations[it.id] || {}).trigger;
-        const autoTrigger = it.trigger;
-        const displayTrigger = manualTrigger || autoTrigger || '';
-        return (
-          <input 
-            value={displayTrigger} 
-            onChange={(e)=> updateAnnotation(it.id, { trigger: e.target.value })} 
-            onClick={(e) => e.stopPropagation()} 
-            placeholder={autoTrigger ? `Auto: ${autoTrigger}` : "Trigger..."}
-            className="w-full px-2 py-1 rounded-md border text-sm" 
-          />
-        );
-      } },
+    { key: "trigger", label: "Trigger", render: (it) => (
+        <TriggerInput 
+          id={it.id} 
+          autoTrigger={it.trigger} 
+          ann={annotations[it.id] || {}} 
+          onChange={(patch) => updateAnnotation(it.id, patch)} 
+        />
+      ) },
     { key: "tags", label: "Tags", render: (it) => (
         <span className="text-xs text-gray-600" title={it.tags}>{it.tags ? (it.tags.length > 50 ? it.tags.substring(0, 50) + '…' : it.tags) : '–'}</span>
       ) },
@@ -556,7 +562,7 @@ const startOrOpenComfy = async () => {
   const Toolbar = () => (
     <div className="flex flex-wrap items-center gap-2">
       {/* API */}
-      <input value={apiBase} onChange={(e) => setApiBase(e.target.value)} placeholder="API Base (e.g. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <DebouncedInput value={apiBase} onChange={setApiBase} placeholder="API Base (e.g. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
       <button onClick={async () => {
         const found = await detectApi();
         if (!found) {
@@ -565,9 +571,9 @@ const startOrOpenComfy = async () => {
       }} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium">Detect API</button>
 
       {/* Scan */}
-      <input value={scanRoot} onChange={(e) => setScanRoot(e.target.value)} placeholder="ComfyUI root (e.g. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <input value={scanOut}  onChange={(e) => setScanOut(e.target.value)}  placeholder="optional: ...\\catalog.json" className="w-64 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
-      <input value={condaEnv} onChange={(e) => setCondaEnv(e.target.value)} placeholder="optional: Conda Env (e.g. comfyui)" className="w-56 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <DebouncedInput value={scanRoot} onChange={setScanRoot} placeholder="ComfyUI root (e.g. F:\\AI\\ComfyUI)" className="w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <DebouncedInput value={scanOut} onChange={setScanOut} placeholder="optional: ...\\catalog.json" className="w-64 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <DebouncedInput value={condaEnv} onChange={setCondaEnv} placeholder="optional: Conda Env (e.g. comfyui)" className="w-56 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
       <button onClick={scanNow} disabled={scanning} className="px-3 py-1.5 rounded-xl border-2 border-blue-500 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">{scanning ? "Scanning..." : "Scan now"}</button>
       <button onClick={enrichFromCivitAI} disabled={selectionCount === 0 || enriching} className="px-3 py-1.5 rounded-xl border-2 border-green-500 bg-green-500 hover:bg-green-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed">
         {enriching ? `🔍 Searching... (${enrichProgress.current}/${enrichProgress.total})` : `🔍 Find selected on CivitAI (${selectionCount})`}
@@ -588,7 +594,7 @@ const startOrOpenComfy = async () => {
       )}
 
       {/* Search */}
-      <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <DebouncedInput value={query} onChange={setQuery} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
     </div>
   );
 
@@ -753,7 +759,7 @@ const startOrOpenComfy = async () => {
       )}
 
       <header className="sticky top-0 z-10 bg-gray-50 p-6 space-y-3 border-b border-gray-200 shadow-sm">
-        <h1 className="text-2xl font-semibold">ComfyDash v2.0</h1>
+        <h1 className="text-2xl font-semibold">ComfyDash v2.0.2</h1>
         <Toolbar />
         <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
         <div className="text-xs text-gray-500">Showing {filtered.length} of {items.length} items</div>
@@ -819,31 +825,149 @@ function SelectBase({ id, current, onChange, opts }) {
   );
 }
 
-function EditableText({ id, field, placeholder, ann, onChange }) {
-  const val = ann?.[field] || "";
+const EditableText = React.memo(function EditableText({ id, field, placeholder, ann, onChange }) {
+  const [localValue, setLocalValue] = useState(ann?.[field] || "");
+  const isEditingRef = useRef(false);
+  
+  useEffect(() => {
+    // Only update if we're not currently editing
+    if (!isEditingRef.current) {
+      setLocalValue(ann?.[field] || "");
+    }
+  }, [ann?.[field]]);
+  
+  const handleFocus = () => {
+    isEditingRef.current = true;
+  };
+  
+  const handleBlur = () => {
+    isEditingRef.current = false;
+    if (localValue !== (ann?.[field] || "")) {
+      onChange({ [field]: localValue });
+    }
+  };
+  
   return (
-    <input value={val} placeholder={placeholder} onChange={(e)=> onChange({ [field]: e.target.value })} onClick={(e) => e.stopPropagation()} className="w-full px-2 py-1 rounded-md border text-sm" />
+    <input 
+      value={localValue} 
+      placeholder={placeholder} 
+      onChange={(e) => setLocalValue(e.target.value)} 
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onClick={(e) => e.stopPropagation()} 
+      className="w-full px-2 py-1 rounded-md border text-sm" 
+    />
   );
-}
+});
 
-function EditableUrl({ id, field, ann, onChange }) {
-  const v = ann?.[field] || "";
+const EditableUrl = React.memo(function EditableUrl({ id, field, ann, onChange }) {
+  const [localValue, setLocalValue] = useState(ann?.[field] || "");
+  const isEditingRef = useRef(false);
+  
+  useEffect(() => {
+    if (!isEditingRef.current) {
+      setLocalValue(ann?.[field] || "");
+    }
+  }, [ann?.[field]]);
+  
+  const handleFocus = () => {
+    isEditingRef.current = true;
+  };
+  
+  const handleBlur = () => {
+    isEditingRef.current = false;
+    if (localValue !== (ann?.[field] || "")) {
+      onChange({ [field]: localValue });
+    }
+  };
+  
   return (
     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-      <input value={v} onChange={(e)=> onChange({ [field]: e.target.value })} placeholder="https://…" className="w-full px-2 py-1 rounded-md border text-sm" />
-      {v ? <a href={v} target="_blank" className="text-blue-600 text-sm underline">Open</a> : null}
+      <input 
+        value={localValue} 
+        onChange={(e) => setLocalValue(e.target.value)} 
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        placeholder="https://…" 
+        className="w-full px-2 py-1 rounded-md border text-sm" 
+      />
+      {localValue ? <a href={localValue} target="_blank" className="text-blue-600 text-sm underline">Open</a> : null}
     </div>
   );
-}
+});
 
-function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
-  const title = ann?.[fieldTitle] || "";
+const EditableLink = React.memo(function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
+  const [localValue, setLocalValue] = useState(ann?.[fieldTitle] || "");
+  const isEditingRef = useRef(false);
+  
+  useEffect(() => {
+    if (!isEditingRef.current) {
+      setLocalValue(ann?.[fieldTitle] || "");
+    }
+  }, [ann?.[fieldTitle]]);
+  
+  const handleFocus = () => {
+    isEditingRef.current = true;
+  };
+  
+  const handleBlur = () => {
+    isEditingRef.current = false;
+    if (localValue !== (ann?.[fieldTitle] || "")) {
+      onChange({ [fieldTitle]: localValue });
+    }
+  };
+  
   return (
     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-      <input value={title} onChange={(e)=> onChange({ [fieldTitle]: e.target.value })} placeholder="Title..." className="w-full px-2 py-1 rounded-md border text-sm" />
+      <input 
+        value={localValue} 
+        onChange={(e) => setLocalValue(e.target.value)} 
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        placeholder="Title..." 
+        className="w-full px-2 py-1 rounded-md border text-sm" 
+      />
     </div>
   );
-}
+});
+
+const TriggerInput = React.memo(function TriggerInput({ id, autoTrigger, ann, onChange }) {
+  const manualTrigger = ann?.trigger || "";
+  const displayValue = manualTrigger || autoTrigger || "";
+  const [localValue, setLocalValue] = useState(displayValue);
+  const isEditingRef = useRef(false);
+  
+  useEffect(() => {
+    if (!isEditingRef.current) {
+      const newDisplayValue = (ann?.trigger || "") || autoTrigger || "";
+      setLocalValue(newDisplayValue);
+    }
+  }, [ann?.trigger, autoTrigger]);
+  
+  const handleFocus = () => {
+    isEditingRef.current = true;
+  };
+  
+  const handleBlur = () => {
+    isEditingRef.current = false;
+    const currentManual = ann?.trigger || "";
+    if (localValue !== currentManual && localValue !== autoTrigger) {
+      onChange({ trigger: localValue });
+    }
+  };
+  
+  return (
+    <input 
+      value={localValue} 
+      onChange={(e) => setLocalValue(e.target.value)} 
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      onClick={(e) => e.stopPropagation()} 
+      placeholder={autoTrigger ? `Auto: ${autoTrigger}` : "Trigger..."}
+      className="w-full px-2 py-1 rounded-md border text-sm" 
+    />
+  );
+});
 
 function BaseBadge({ value }) {
   const v = (value || "").toLowerCase();
@@ -860,3 +984,40 @@ function BaseBadge({ value }) {
     </span>
   );
 }
+
+const DebouncedInput = React.memo(function DebouncedInput({ value, onChange, placeholder, className }) {
+  const [localValue, setLocalValue] = useState(value);
+  const isEditingRef = useRef(false);
+  
+  useEffect(() => {
+    if (!isEditingRef.current) {
+      setLocalValue(value);
+    }
+  }, [value]);
+  
+  const handleFocus = () => {
+    isEditingRef.current = true;
+  };
+  
+  const handleBlur = () => {
+    isEditingRef.current = false;
+    if (localValue !== value) {
+      onChange(localValue);
+    }
+  };
+  
+  const handleChange = (e) => {
+    setLocalValue(e.target.value);
+  };
+  
+  return (
+    <input
+      value={localValue}
+      onChange={handleChange}
+      onFocus={handleFocus}
+      onBlur={handleBlur}
+      placeholder={placeholder}
+      className={className}
+    />
+  );
+});

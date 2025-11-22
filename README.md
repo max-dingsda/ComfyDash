@@ -143,6 +143,7 @@ python mini_server.py --host 127.0.0.1 --port 8000
 | **1.3 ✅** | UX & Polish | Improved architecture detection, sortable columns, optimized layout, workflow templates (prep for v2.0) |
 | **2.0 ✅** | Workflows | Launch ComfyUI directly from dashboard, conda environment support, real-time status detection |
 | **2.0.1 ✅** | Bug Fixes & UX | Fixed CivitAI API integration (missing `/enrich-civitai` endpoint), added progress overlay for CivitAI searches, resizable columns with per-type persistence |
+| **2.0.2 ✅** | Bug Fixes | Fixed input field focus loss during typing, fixed sorting to check manual annotations and use case-insensitive comparison |
 | **2.1** | Workflows | 🔜 Launch ComfyUI with preconfigured workflow templates |
 
 ---
