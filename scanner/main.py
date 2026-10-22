@@ -18,12 +18,12 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 MODEL_SUBFOLDERS = {
-    "checkpoint": ["models/checkpoints"],
+    "checkpoint": ["models/checkpoints", "models/diffusion_models", "models/diffusion models"],
     "lora": ["models/loras", "models/lora"],
     "embedding": ["models/embeddings", "models/embedding"],
 }
 
-CHECKPOINT_EXT = {".ckpt", ".safetensors", ".pt", ".bin"}
+CHECKPOINT_EXT = {".ckpt", ".safetensors", ".pt", ".bin", ".gguf"}
 LORA_EXT       = {".safetensors"}
 EMBED_EXT      = {".pt", ".bin", ".safetensors"}
 

@@ -83,6 +83,8 @@ This will:
 
 ### Basic Workflow
 
+The **Checkpoints** section combines models from `models/checkpoints`, `models/diffusion_models`, and `models/diffusion models`, including subfolders. Supported formats are `.ckpt`, `.safetensors`, `.pt`, `.bin`, and `.gguf`. Click **Scan now** to refresh the list after adding models.
+
 1. 🌍 Open the dashboard in your browser
 2. 🔍 Click **"Detect API"** to find the running backend
 3. 📂 Enter your ComfyUI root path (e.g., `F:\AI\ComfyUI`)
