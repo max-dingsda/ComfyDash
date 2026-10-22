@@ -559,7 +559,7 @@ const startOrOpenComfy = async () => {
     </div>
   );
 
-  const Toolbar = () => (
+  const renderToolbar = () => (
     <div className="flex flex-wrap items-center gap-2">
       {/* API */}
       <DebouncedInput value={apiBase} onChange={setApiBase} placeholder="API Base (e.g. http://127.0.0.1:8001)" className="w-80 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
@@ -594,7 +594,7 @@ const startOrOpenComfy = async () => {
       )}
 
       {/* Search */}
-      <DebouncedInput value={query} onChange={setQuery} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <input type="search" aria-label="Search name/type/base/path" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
     </div>
   );
 
@@ -760,7 +760,7 @@ const startOrOpenComfy = async () => {
 
       <header className="sticky top-0 z-10 bg-gray-50 p-6 space-y-3 border-b border-gray-200 shadow-sm">
         <h1 className="text-2xl font-semibold">ComfyDash v2.0.2</h1>
-        <Toolbar />
+        {renderToolbar()}
         <div className="text-xs text-gray-500">{meta.comfyui_root ? `Root: ${meta.comfyui_root}` : ""}</div>
         <div className="text-xs text-gray-500">Showing {filtered.length} of {items.length} items</div>
         <Summary />
