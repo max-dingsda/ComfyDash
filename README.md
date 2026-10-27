@@ -61,6 +61,14 @@ cd comfydash
 npm install
 ```
 
+💡 *Note:* Newer npm versions may report that the install script of `esbuild` (used by Vite) was not run. The build works without it. If you run into problems on another machine, allow it with:
+
+```bash
+npm install-scripts approve esbuild
+```
+
+⚠️ Always run npm commands inside `comfydash/`, not in the project root.
+
 #### 2️⃣ Start ComfyDash
 
 Run the PowerShell script in the project root:
