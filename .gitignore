@@ -1,5 +1,5 @@
 # Node / Vite
-comfydash/node_modules/
+node_modules/
 comfydash/.vite/
 comfydash/.vite-temp/
 comfydash/dist/
