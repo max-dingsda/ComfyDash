@@ -26,9 +26,6 @@ class ScanTests(unittest.TestCase):
                       for item in catalog["items"]}
             self.assertEqual(actual, files)
             self.assertEqual(catalog["count"], len(files))
-            for item in catalog["items"]:
-                if "flux2" in item["name"]:
-                    self.assertEqual(item["base"], "flux")
 
     def test_missing_model_folders(self):
         with tempfile.TemporaryDirectory() as tmp:

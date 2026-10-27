@@ -16,19 +16,19 @@ ComfyDash combines a ⚙️ Python‑based scanner that generates a structured *
 * 🧾 Generates a unified **catalog.json** file
 * 📏 Captures file size, modification date, type, and stable ID
 * 🚫 Automatically skips missing or invalid files
-* 🔐 Extracts metadata from Safetensors files (triggers, tags, base model, CivitAI URLs)
+* 🔐 Extracts metadata from Safetensors files (triggers, tags, CivitAI URLs)
 * 🎯 **NEW in v1.3:** Improved architecture detection for SDXL, Pony, Illustrious, and Cascade models
 
 ### 🖥️ Dashboard (React + Tailwind)
 
 * 🗂️ Accordions per model type (Checkpoint / LoRA / Embedding) with "Select All" functionality
 * 🔎 Search & filter (client‑side, no backend required)
-* ✏️ Inline editing for model name, CivitAI link, trigger tags, base model, etc.
+* ✏️ Inline editing for model name, CivitAI link, trigger tags, architecture, etc.
 * 💾 Local persistence of all edits via `localStorage`
 * 🧠 Heuristic suitability detection (📷 Realistic / ✏️ Drawing) with manual override
 * ⭐ Favorites system
 * 📌 Sticky header for improved navigation
-* 🤖 Automatic metadata extraction from Safetensors (trigger words, tags, base model)
+* 🤖 Automatic metadata extraction from Safetensors (trigger words, tags)
 * 🌐 CivitAI integration - search selected models on CivitAI and auto-fill metadata
 * 📊 **NEW in v2.0.1:** Visual progress overlay during CivitAI searches with file-by-file status
 * 📏 **NEW in v2.0.1:** Resizable columns - drag column borders to adjust widths, settings saved per model type

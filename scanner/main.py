@@ -56,43 +56,6 @@ def fast_id(path: Path) -> str:
     return h.hexdigest()
 
 
-def guess_base_model(name: str) -> str:
-    """Detect base model architecture from filename.
-    
-    Priority order:
-    1. Flux (most specific)
-    2. Cascade (very specific)
-    3. Pony/Illustrious (SDXL-based but distinct)
-    4. SDXL (various patterns)
-    5. SD1.5 (default)
-    """
-    n = name.lower()
-    
-    # Flux (very specific)
-    if any(k in n for k in ("flux", "flux.1", "flux1")):
-        return "flux"
-    
-    # Cascade (very specific)
-    if any(k in n for k in ("cascade", "stage_b", "stage_c")):
-        return "cascade"
-    
-    # Pony/Illustrious (check before SDXL since they're SDXL-based but distinct)
-    if any(k in n for k in ("pony", "illustrious", "noobai")):
-        return "pony"
-    
-    # SDXL patterns - strong indicators first
-    if any(k in n for k in ("sdxl", "sd_xl", "sd-xl", "juggernautxl", "xlbase", "refiner")):
-        return "sdxl"
-    
-    # Weaker indicator: "xl" somewhere in name (but not in SD1.5 context)
-    # This catches things like "hentaiMixXL" or "mixXL"
-    if "xl" in n and not any(k in n for k in ("1.5", "1-5", "v1-5", "v15")):
-        return "sdxl"
-    
-    # Default to SD1.5
-    return "sd15"
-
-
 def read_safetensors_metadata(path: Path) -> Optional[Dict[str, Any]]:
     """Read metadata from safetensors file header."""
     try:
@@ -165,36 +128,11 @@ def extract_civitai_url(metadata: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def extract_base_from_metadata(metadata: Dict[str, Any]) -> Optional[str]:
-    """Extract base model from safetensors metadata."""
-    # Check ss_base_model_version
-    base_version = metadata.get('ss_base_model_version', '')
-    if 'xl' in base_version.lower():
-        return 'sdxl'
-    if 'v2' in base_version.lower():
-        return 'sd20'
-    if 'v1' in base_version.lower() or 'sd_v1' in base_version.lower():
-        return 'sd15'
-    
-    # Check ss_sd_model_name
-    model_name = metadata.get('ss_sd_model_name', '')
-    if model_name:
-        if 'xl' in model_name.lower():
-            return 'sdxl'
-        if 'v2' in model_name.lower() or '2-' in model_name:
-            return 'sd20'
-        if 'v1' in model_name.lower() or '1-5' in model_name:
-            return 'sd15'
-    
-    return None
-
-
 def collect_items(root: Path) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
 
     def add_item(kind: str, path: Path):
         name = path.stem
-        base = guess_base_model(name)
         st = path.stat()
         
         # Basic item data
@@ -204,7 +142,6 @@ def collect_items(root: Path) -> List[Dict[str, Any]]:
             "name": name,
             "path": str(path),
             "size": st.st_size,
-            "base": base,
             "mtime": int(st.st_mtime),
         }
         
@@ -212,11 +149,6 @@ def collect_items(root: Path) -> List[Dict[str, Any]]:
         if path.suffix.lower() == '.safetensors':
             metadata = read_safetensors_metadata(path)
             if metadata:
-                # Extract base model from metadata (overrides filename guess)
-                meta_base = extract_base_from_metadata(metadata)
-                if meta_base:
-                    item['base'] = meta_base
-                
                 # Extract CivitAI URL
                 civitai_url = extract_civitai_url(metadata)
                 if civitai_url:

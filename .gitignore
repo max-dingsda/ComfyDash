@@ -24,3 +24,11 @@ Thumbs.db
 
 # Lokale Daten (werden generiert)
 catalog.json
+
+# Python
+__pycache__/
+
+# Versehentliche Scan-Ausgaben im Root
+/d
+/ds
+/s

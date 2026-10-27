@@ -21,13 +21,21 @@ const useLocalStorage = (key, initial) => {
 const ANN_KEY = "cd.annotations";
 const annStore = {
   _cache: null,
-  load() { if (this._cache) return this._cache; try { this._cache = JSON.parse(localStorage.getItem(ANN_KEY) || "{}"); } catch { this._cache = {}; } return this._cache; },
+  load() {
+    if (this._cache) return this._cache;
+    try { this._cache = JSON.parse(localStorage.getItem(ANN_KEY) || "{}"); } catch { this._cache = {}; }
+    // Discard legacy "base" values (replaced by free-text "architecture")
+    let migrated = false;
+    for (const a of Object.values(this._cache)) if (a && "base" in a) { delete a.base; migrated = true; }
+    if (migrated) this.save();
+    return this._cache;
+  },
   save() { localStorage.setItem(ANN_KEY, JSON.stringify(this._cache || {})); },
   get(id) { return this.load()[id] || {}; },
   set(id, patch) { 
     const a = this.load(); 
-    // Only mark as manual if changing content fields (not favorite or base)
-    const isContentChange = Object.keys(patch).some(k => !['favorite', 'base'].includes(k));
+    // Only mark as manual if changing content fields (not favorite)
+    const isContentChange = Object.keys(patch).some(k => k !== 'favorite');
     a[id] = { ...(a[id]||{}), ...patch };
     if (isContentChange) a[id]._manual = true;
     this.save(); 
@@ -36,15 +44,6 @@ const annStore = {
 };
 
 // ---------- inference helpers ----------
-const inferBaseModel = (name, existing) => {
-  if (existing && existing !== "") return existing;
-  const n = (name||"").toLowerCase();
-  if (n.includes("flux")) return "flux";
-  if (n.includes("pony") || n.includes("illustrious")) return "pony";
-  if ((n.includes("sdxl") || n.includes("juggernautxl") || n.includes("xl") || n.includes("refiner")) && !n.includes("1.5")) return "sdxl";
-  return "sd15";
-};
-
 const inferSuitabilityCheckpoint = (name) => {
   const n = (name||"").toLowerCase();
   const real = /(real|photo|photoreal|portrait|cinema|film)/.test(n);
@@ -67,13 +66,11 @@ const normalizeItem = (raw) => {
   const name = raw.name ?? "(no name)";
   const path = raw.path ?? "";
   const file_name = path ? (path.split(/\\\\|\//).pop() || name) : name;
-  const base = inferBaseModel(name, raw.base);
   return {
     id,
     type: raw.type ?? "unknown",
     name,
     file_name,
-    base,
     size: raw.size ?? 0,
     path,
     mtime: raw.mtime ?? 0,
@@ -90,10 +87,10 @@ export default function App() {
   // data
   const [items, setItems] = useState([]);
   const [meta, setMeta] = useState({ comfyui_root: "", count: 0 });
-  const [loading, setLoading] = useState(false);
+  const [loading] = useState(false);
   
   // ComfyUI launch
-  const [comfyUrl, setComfyUrl] = useLocalStorage("cd.comfy.url", "http://127.0.0.1:8188");
+  const [comfyUrl] = useLocalStorage("cd.comfy.url", "http://127.0.0.1:8188");
   const [startingComfy, setStartingComfy] = useState(false);
   const [comfyRunning, setComfyRunning] = useState(false);
 
@@ -139,9 +136,9 @@ export default function App() {
   // Column width management
   const getDefaultWidths = (type) => {
     const defaults = {
-      checkpoint: { _select: 40, file_name: 200, civitai_title: 400, base: 140, realistic: 100, drawing: 100, sampler: 140, steps: 100, cfg: 100, civitai_link: 120, fav: 50 },
-      lora: { _select: 40, file_name: 200, civitai_title: 400, base: 140, trigger: 250, tags: 200, civitai_link: 120, fav: 50 },
-      embedding: { _select: 40, file_name: 200, civitai_title: 400, base: 140, civitai_link: 120, fav: 50 }
+      checkpoint: { _select: 40, file_name: 200, civitai_title: 400, architecture: 140, realistic: 100, drawing: 100, sampler: 140, steps: 100, cfg: 100, civitai_link: 120, fav: 50 },
+      lora: { _select: 40, file_name: 200, civitai_title: 400, architecture: 140, trigger: 250, tags: 200, civitai_link: 120, fav: 50 },
+      embedding: { _select: 40, file_name: 200, civitai_title: 400, architecture: 140, civitai_link: 120, fav: 50 }
     };
     return defaults[type] || {};
   };
@@ -227,7 +224,7 @@ export default function App() {
           setApiBase(`${host}:${p}`); 
           return true;
         }
-      } catch {}
+      } catch { /* port not reachable, try next */ }
     }
     // Don't show alert on initial load - only when user clicks Detect API button
     return false;
@@ -349,6 +346,7 @@ const startOrOpenComfy = async () => {
             civitai_title: data.model_name,
             trigger: data.trained_words?.join(', ') || item.trigger,
           };
+          if (data.base_model) updates.architecture = data.base_model;
           // Store in annStore directly and remove _manual flag
           const a = annStore.load();
           a[item.id] = { ...(a[item.id] || {}), ...updates };
@@ -395,7 +393,7 @@ const startOrOpenComfy = async () => {
     let list = !q ? items : items.filter(it => (
       it.name.toLowerCase().includes(q) ||
       it.type.toLowerCase().includes(q) ||
-      (it.base || "").toLowerCase().includes(q) ||
+      ((annotations[it.id] || {}).architecture || "").toLowerCase().includes(q) ||
       (it.path || "").toLowerCase().includes(q)
     ));
     const dir = sortDir === "asc" ? 1 : -1;
@@ -404,7 +402,7 @@ const startOrOpenComfy = async () => {
       const getVal = (item, key) => {
         const ann = annotations[item.id] || {};
         if (key === 'civitai_title') return ann.civitai_title || item.name || "";
-        if (key === 'base') return ann.base || item.base || "";
+        if (key === 'architecture') return ann.architecture || "";
         if (key === 'trigger') return ann.trigger || item.trigger || "";
         return item[key] ?? "";
       };
@@ -434,8 +432,6 @@ const startOrOpenComfy = async () => {
   }), [items]);
 
   // ----- per-type column defs -----
-  const BASE_OPTIONS = ["sd15", "sdxl", "flux", "pony", "cascade"];
-
   const CHECKPOINT_COLUMNS = [
     { key: "_select", label: "", render: (it) => (
         <input 
@@ -448,10 +444,10 @@ const startOrOpenComfy = async () => {
       ) },
     { key: "file_name", label: "Path" },
     { key: "civitai_title", label: "Name", render: (it) => (
-        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
+        <EditableLink fieldTitle="civitai_title" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
-    { key: "base", label: "Base-Model", render: (it) => (
-        <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
+    { key: "architecture", label: "Architecture", render: (it) => (
+        <EditableText field="architecture" placeholder="Architecture..." ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "realistic", label: "📷 Realistic", render: (it) => { 
         const manualRealistic = (annotations[it.id] || {}).realistic;
@@ -485,7 +481,7 @@ const startOrOpenComfy = async () => {
     { key: "steps",   label: "Steps (Rec.)",          render: (it) => presetsForCheckpoint(it.name).steps },
     { key: "cfg",     label: "CFG (Rec.)",            render: (it) => presetsForCheckpoint(it.name).cfg },
     { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
-        <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
+        <EditableUrl field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
@@ -502,14 +498,13 @@ const startOrOpenComfy = async () => {
       ) },
     { key: "file_name", label: "Path" },
     { key: "civitai_title", label: "Name", render: (it) => (
-        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
+        <EditableLink fieldTitle="civitai_title" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
-    { key: "base", label: "Base-Model", render: (it) => (
-        <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
+    { key: "architecture", label: "Architecture", render: (it) => (
+        <EditableText field="architecture" placeholder="Architecture..." ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "trigger", label: "Trigger", render: (it) => (
         <TriggerInput 
-          id={it.id} 
           autoTrigger={it.trigger} 
           ann={annotations[it.id] || {}} 
           onChange={(patch) => updateAnnotation(it.id, patch)} 
@@ -519,7 +514,7 @@ const startOrOpenComfy = async () => {
         <span className="text-xs text-gray-600" title={it.tags}>{it.tags ? (it.tags.length > 50 ? it.tags.substring(0, 50) + '…' : it.tags) : '–'}</span>
       ) },
     { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
-        <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
+        <EditableUrl field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
@@ -536,13 +531,13 @@ const startOrOpenComfy = async () => {
       ) },
     { key: "file_name", label: "Path" },
     { key: "civitai_title", label: "Name", render: (it) => (
-        <EditableLink id={it.id} fieldTitle="civitai_title" fieldLink="civitai_link" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
+        <EditableLink fieldTitle="civitai_title" ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
-    { key: "base", label: "Base-Model", render: (it) => (
-        <SelectBase id={it.id} current={(annotations[it.id] || {}).base || it.base} onChange={(v)=> updateAnnotation(it.id, { base: v })} opts={BASE_OPTIONS} />
+    { key: "architecture", label: "Architecture", render: (it) => (
+        <EditableText field="architecture" placeholder="Architecture..." ann={annotations[it.id] || {}} onChange={(patch) => updateAnnotation(it.id, patch)} />
       ) },
     { key: "civitai_link", label: "CivitAI-Link", render: (it) => (
-        <EditableUrl id={it.id} field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
+        <EditableUrl field="civitai_link" ann={annotations[it.id] || {}} onChange={(patch)=> updateAnnotation(it.id, patch)} />
       ) },
     { key: "fav",  label: "★", render: (it) => <Star id={it.id} onToggle={()=> updateAnnotation(it.id, { favorite: !(annotations[it.id] || {}).favorite })} active={!!(annotations[it.id] || {}).favorite} /> },
   ];
@@ -594,7 +589,7 @@ const startOrOpenComfy = async () => {
       )}
 
       {/* Search */}
-      <input type="search" aria-label="Search name/type/base/path" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/base/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
+      <input type="search" aria-label="Search name/type/architecture/path" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name/type/architecture/path" className="ml-auto w-72 px-3 py-1.5 rounded-lg border border-gray-300 text-sm" />
     </div>
   );
 
@@ -806,26 +801,7 @@ function Star({ active, onToggle }) {
   );
 }
 
-function SelectBase({ id, current, onChange, opts }) {
-  return (
-    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-      <select
-        value={current}
-        onChange={(e) => onChange(e.target.value)}
-        className="px-2 py-1 rounded-md border text-sm"
-      >
-        {opts.map((o) => (
-          <option key={o} value={o}>
-            {o}
-          </option>
-        ))}
-      </select>
-      <BaseBadge value={current} />
-    </div>
-  );
-}
-
-const EditableText = React.memo(function EditableText({ id, field, placeholder, ann, onChange }) {
+const EditableText = React.memo(function EditableText({ field, placeholder, ann, onChange }) {
   const [localValue, setLocalValue] = useState(ann?.[field] || "");
   const isEditingRef = useRef(false);
   
@@ -860,7 +836,7 @@ const EditableText = React.memo(function EditableText({ id, field, placeholder, 
   );
 });
 
-const EditableUrl = React.memo(function EditableUrl({ id, field, ann, onChange }) {
+const EditableUrl = React.memo(function EditableUrl({ field, ann, onChange }) {
   const [localValue, setLocalValue] = useState(ann?.[field] || "");
   const isEditingRef = useRef(false);
   
@@ -896,7 +872,7 @@ const EditableUrl = React.memo(function EditableUrl({ id, field, ann, onChange }
   );
 });
 
-const EditableLink = React.memo(function EditableLink({ id, fieldTitle, fieldLink, ann, onChange }) {
+const EditableLink = React.memo(function EditableLink({ fieldTitle, ann, onChange }) {
   const [localValue, setLocalValue] = useState(ann?.[fieldTitle] || "");
   const isEditingRef = useRef(false);
   
@@ -931,7 +907,7 @@ const EditableLink = React.memo(function EditableLink({ id, fieldTitle, fieldLin
   );
 });
 
-const TriggerInput = React.memo(function TriggerInput({ id, autoTrigger, ann, onChange }) {
+const TriggerInput = React.memo(function TriggerInput({ autoTrigger, ann, onChange }) {
   const manualTrigger = ann?.trigger || "";
   const displayValue = manualTrigger || autoTrigger || "";
   const [localValue, setLocalValue] = useState(displayValue);
@@ -968,22 +944,6 @@ const TriggerInput = React.memo(function TriggerInput({ id, autoTrigger, ann, on
     />
   );
 });
-
-function BaseBadge({ value }) {
-  const v = (value || "").toLowerCase();
-  const conf = {
-    sd15:    { label: "SD 1.5",  cls: "bg-blue-50 text-blue-700 border-blue-200" },
-    sdxl:    { label: "SDXL",    cls: "bg-purple-50 text-purple-700 border-purple-200" },
-    flux:    { label: "FLUX",    cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    pony:    { label: "PONY",    cls: "bg-amber-50 text-amber-700 border-amber-200" },
-    cascade: { label: "Cascade", cls: "bg-pink-50 text-pink-700 border-pink-200" },
-  }[v] || { label: value || "?", cls: "bg-gray-50 text-gray-600 border-gray-200" };
-  return (
-    <span className={`inline-flex items-center px-2 py-0.5 rounded-full border text-[10px] leading-4 ${conf.cls}`}>
-      {conf.label}
-    </span>
-  );
-}
 
 const DebouncedInput = React.memo(function DebouncedInput({ value, onChange, placeholder, className }) {
   const [localValue, setLocalValue] = useState(value);
